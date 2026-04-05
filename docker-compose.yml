@@ -1,3 +1,5 @@
+# Local development only. For any shared or production deployment, use strong
+# credentials via env_file / secrets — do not reuse defaults from a public repo.
 services:
   postgres:
     image: postgres:16

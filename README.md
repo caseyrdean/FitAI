@@ -1,5 +1,11 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## Security & privacy (before you push)
+
+- Copy `.env.local.example` to **`.env.local`** and set secrets there. **`.env*` files and `/uploads/*` are gitignored** (API keys and lab uploads must not be committed).
+- Use **`uploads/.gitkeep`** only so the folder exists; real PDFs/images stay local.
+- If an API key ever touched a branch or fork, **rotate it** in the provider dashboard.
+
 ## Getting Started
 
 First, run the development server:

@@ -18,15 +18,35 @@
 
 # misc
 .DS_Store
+Thumbs.db
 *.pem
+*.key
+*.p12
+*.pfx
 
 # debug
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+*.log
 
-# local env files
-.env*.local
+# Secrets & local environment (never commit — API keys, DB URLs with passwords)
+.env
+.env.*
+!.env.example
+!.env*.example
+
+# User uploads & health documents (PII — lab PDFs, images, exports)
+/uploads/*
+!/uploads/.gitkeep
+
+# Local databases / dumps
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+dump.rdb
+*.sql.gz
 
 # vercel
 .vercel
@@ -34,3 +54,15 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+/lib/generated/prisma
+
+# IDE / local tooling (paths, tokens)
+.cursor/
+.idea/
+*.swp
+*.swo
+
+# Caches
+.turbo/
+.cache/
