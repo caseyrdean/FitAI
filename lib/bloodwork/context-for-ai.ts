@@ -53,8 +53,11 @@ const MEAL_AND_NUTRIENT_RULES = `Apply to meal plans and per-food nutrient estim
 - **Liver enzymes (ALT/AST) high**: avoid alcohol-forward plans; emphasize whole foods; keep fat quality reasonable.
 - If an analyte is **low** (e.g. vitamin D), you may slightly favor food sources — still respect calorie/macro targets.`;
 
+const ATLAS_MAX_NON_FLAGGED_MARKERS = 45;
+
 /**
  * Rich block for Atlas context: latest panel + explicit planning rules.
+ * Caps non-flagged rows so huge CMP/CBC panels do not blow the context window.
  */
 export function formatBloodWorkForAtlasContext(
   record: BloodWorkRecordWithMarkers | null,
@@ -73,9 +76,15 @@ export function formatBloodWorkForAtlasContext(
         ? `### Flagged analytes (must influence generate_meal_plan and check-ins)\n${flagged.map(markerLine).join("\n")}`
         : "### Flagged analytes\nNone on this panel.";
 
+    const okShown = ok.slice(0, ATLAS_MAX_NON_FLAGGED_MARKERS);
+    const okOmitted = ok.length - okShown.length;
     const restBlock =
-      ok.length > 0
-        ? `### Other analytes (same draw)\n${ok.map(markerLine).join("\n")}`
+      okShown.length > 0
+        ? `### Other analytes (same draw)\n${okShown.map(markerLine).join("\n")}${
+            okOmitted > 0
+              ? `\n- …and ${okOmitted} more analytes (see Blood Work in app for full list).`
+              : ""
+          }`
         : "";
 
     return `## Latest blood panels (${dateStr}, recordId ${record.id})

@@ -11,6 +11,27 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
+/** Larger model = bigger context + output; use for heavy check-ins if Haiku truncates tools. */
+const ATLAS_MODEL =
+  process.env.ATLAS_MODEL?.trim() || "claude-haiku-4-5";
+
+const ATLAS_MAX_OUTPUT_TOKENS = Math.min(
+  64000,
+  Math.max(
+    4096,
+    parseInt(process.env.ATLAS_MAX_OUTPUT_TOKENS || "16384", 10) || 16384,
+  ),
+);
+
+/** Keep last N turns so long threads do not exceed context limits. */
+const ATLAS_MAX_HISTORY_MESSAGES = Math.min(
+  80,
+  Math.max(
+    8,
+    parseInt(process.env.ATLAS_MAX_HISTORY_MESSAGES || "36", 10) || 36,
+  ),
+);
+
 export interface AtlasInput {
   userId: string;
   message: string;
@@ -49,7 +70,10 @@ export function runAtlas(input: AtlasInput): ReadableStream<Uint8Array> {
 
         const messages: Anthropic.MessageParam[] = [];
 
-        for (const msg of input.conversationHistory) {
+        const historySlice = input.conversationHistory.slice(
+          -ATLAS_MAX_HISTORY_MESSAGES,
+        );
+        for (const msg of historySlice) {
           messages.push({ role: msg.role, content: msg.content });
         }
         messages.push({ role: "user", content: input.message });
@@ -57,7 +81,8 @@ export function runAtlas(input: AtlasInput): ReadableStream<Uint8Array> {
         let fullResponse = "";
         let shouldStop = false;
         let iterations = 0;
-        const MAX_ITERATIONS = 8;
+        /** Meal + workout + profile in one check-in can need several model↔tool rounds. */
+        const MAX_ITERATIONS = 14;
 
         const sendSSE = (event: AtlasStreamEvent) => {
           controller.enqueue(
@@ -68,9 +93,10 @@ export function runAtlas(input: AtlasInput): ReadableStream<Uint8Array> {
         // Agentic loop: call the API, handle tool use, repeat
         while (!shouldStop && iterations < MAX_ITERATIONS) {
           iterations++;
+          let stoppedForMaxTokens = false;
           const response = await anthropic.messages.create({
-            model: "claude-haiku-4-5",
-            max_tokens: 8192,
+            model: ATLAS_MODEL,
+            max_tokens: ATLAS_MAX_OUTPUT_TOKENS,
             system: systemPrompt,
             tools: TOOL_DEFINITIONS,
             messages,
@@ -119,10 +145,26 @@ export function runAtlas(input: AtlasInput): ReadableStream<Uint8Array> {
                 inToolUse = false;
               }
             } else if (event.type === "message_delta") {
-              if (event.delta.stop_reason === "end_turn") {
+              const sr = event.delta.stop_reason;
+              if (sr === "end_turn") {
                 shouldStop = true;
               }
+              if (sr === "max_tokens") {
+                stoppedForMaxTokens = true;
+                if (toolUseBlocks.length === 0) {
+                  shouldStop = true;
+                }
+              }
             }
+          }
+
+          if (stoppedForMaxTokens && toolUseBlocks.length > 0) {
+            sendSSE({
+              type: "text",
+              content:
+                "\n\n— Output hit the token limit while building a tool request; the tool may be incomplete. I'll stop this round — say **continue** and I'll retry with smaller steps (e.g. meal plan only, then workout plan). —",
+            });
+            shouldStop = true;
           }
 
           if (toolUseBlocks.length > 0 && !shouldStop) {
@@ -210,6 +252,14 @@ export function runAtlas(input: AtlasInput): ReadableStream<Uint8Array> {
           } else {
             shouldStop = true;
           }
+        }
+
+        if (iterations >= MAX_ITERATIONS && !shouldStop) {
+          sendSSE({
+            type: "text",
+            content:
+              "\n\n— Reached the maximum number of agent steps for this message. Say **continue** to finish (e.g. remaining tools), or split into: update meal plan, then workouts. —",
+          });
         }
 
         Array.from(refreshTargets).forEach((target) => {

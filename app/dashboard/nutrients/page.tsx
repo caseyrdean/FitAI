@@ -40,10 +40,11 @@ import {
   type IntakeRow,
 } from "@/lib/nutrients/micronutrients";
 import {
-  currentLocalWeekDateKeys,
   FOOD_LOG_SYNC_DAYS,
   formatLocalWeekRangeLabel,
+  parseWeekStartToLocalSunday,
   startOfLocalWeekSunday,
+  trackingWeekDateKeysForMealPlan,
 } from "@/lib/local-week";
 
 type FoodLogEntry = {
@@ -145,6 +146,7 @@ function MicronutrientTable({
 
 export default function NutrientsPage() {
   const [entries, setEntries] = useState<FoodLogEntry[] | null>(null);
+  const [mealPlanWeekStart, setMealPlanWeekStart] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshTick, setRefreshTick] = useState(0);
   /** Must be computed in the browser so "today" matches the user's timezone (SSR used server TZ). */
@@ -161,11 +163,12 @@ export default function NutrientsPage() {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`/api/foodlog?days=${FOOD_LOG_SYNC_DAYS}`, {
-          cache: "no-store",
-        });
-        if (!res.ok) throw new Error(await res.text());
-        const raw = (await res.json()) as unknown;
+        const [logRes, mealsRes] = await Promise.all([
+          fetch(`/api/foodlog?days=${FOOD_LOG_SYNC_DAYS}`, { cache: "no-store" }),
+          fetch("/api/meals", { cache: "no-store" }),
+        ]);
+        if (!logRes.ok) throw new Error(await logRes.text());
+        const raw = (await logRes.json()) as unknown;
         const list = Array.isArray(raw) ? raw : [];
         const normalized: FoodLogEntry[] = list
           .filter((row): row is Record<string, unknown> => row !== null && typeof row === "object")
@@ -184,7 +187,15 @@ export default function NutrientsPage() {
               nutrients: row.nutrients ?? {},
             };
           });
-        if (!cancelled) setEntries(normalized);
+        let weekStart: string | null = null;
+        if (mealsRes.ok) {
+          const mp = (await mealsRes.json()) as { weekStart?: string } | null;
+          weekStart = mp && typeof mp.weekStart === "string" ? mp.weekStart : null;
+        }
+        if (!cancelled) {
+          setEntries(normalized);
+          setMealPlanWeekStart(weekStart);
+        }
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load food log");
       }
@@ -197,11 +208,19 @@ export default function NutrientsPage() {
   /** State can lag one frame; always fall back so we never drop rows when `entries` is loaded. */
   const effectiveTodayKey = todayKey || todayLocalDateKey();
 
+  /** Invalidates week-boundary memos when the local calendar day changes (see meals page). */
+  const weekRollKey = todayLocalDateKey();
+
+  const weekKeys = useMemo(
+    () => trackingWeekDateKeysForMealPlan(mealPlanWeekStart, new Date()),
+    [mealPlanWeekStart, weekRollKey],
+  );
+
   const weekEntries = useMemo(() => {
     if (!entries) return [];
-    const set = new Set(currentLocalWeekDateKeys());
+    const set = new Set(weekKeys);
     return entries.filter((e) => set.has(localDateKeyFromLoggedAt(e.loggedAt)));
-  }, [entries]);
+  }, [entries, weekKeys]);
 
   const weekMacros = useMemo(
     () => aggregateMacrosFromEntries(weekEntries),
@@ -220,7 +239,12 @@ export default function NutrientsPage() {
     return rowsFromTotalsScaled(totals, 7);
   }, [weekEntries]);
 
-  const weekRangeLabel = formatLocalWeekRangeLabel(startOfLocalWeekSunday());
+  const weekRangeLabel = useMemo(() => {
+    const anchor = weekKeys[0]
+      ? parseWeekStartToLocalSunday(weekKeys[0], new Date())
+      : startOfLocalWeekSunday();
+    return formatLocalWeekRangeLabel(anchor);
+  }, [weekKeys, weekRollKey]);
 
   const vitaminRowsWeek = useMemo(
     () => weekRows.filter((r) => r.group === "vitamin"),
@@ -240,8 +264,8 @@ export default function NutrientsPage() {
 
   const trendData = useMemo(() => {
     if (!entries) return [];
-    return buildTrendSeriesForDateKeys(entries, currentLocalWeekDateKeys());
-  }, [entries]);
+    return buildTrendSeriesForDateKeys(entries, weekKeys);
+  }, [entries, weekKeys]);
 
   const trendSummary = useMemo(() => {
     if (!entries || trendData.length === 0) return null;

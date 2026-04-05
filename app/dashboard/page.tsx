@@ -3,9 +3,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAtlasRefresh } from "@/hooks/use-atlas-refresh";
 import {
-  currentLocalWeekDateKeys,
   FOOD_LOG_SYNC_DAYS,
   planDayIndexFromWeekStart,
+  trackingWeekDateKeysForMealPlan,
 } from "@/lib/local-week";
 import {
   LineChart,
@@ -16,6 +16,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
+import { todayLocalDateKey } from "@/lib/nutrients/micronutrients";
 import { Check, MessageCircle } from "lucide-react";
 import {
   Card,
@@ -351,6 +352,7 @@ export default function DashboardPage() {
   }, [refreshTick]);
 
   const todayKey = localDateKey(startOfLocalDay(new Date()));
+  const weekRollKey = todayLocalDateKey();
 
   const todayTotals = useMemo(() => {
     let calories = 0;
@@ -370,11 +372,14 @@ export default function DashboardPage() {
 
   const macroTargets = parseMacroTargets(mealPlan?.macroTargets);
   const calorieTarget = macroTargets?.calories;
+  const proteinTarget = macroTargets?.protein_g;
+  const carbsTarget = macroTargets?.carbs_g;
+  const fatTarget = macroTargets?.fat_g;
 
   const streak = useMemo(() => foodLogStreak(foodLog), [foodLog]);
 
   const calorieSeries = useMemo(() => {
-    const keys = currentLocalWeekDateKeys();
+    const keys = trackingWeekDateKeysForMealPlan(mealPlan?.weekStart ?? null, new Date());
     return keys.map((key) => {
       const d = new Date(`${key}T12:00:00`);
       const calories = foodLog
@@ -385,7 +390,7 @@ export default function DashboardPage() {
         calories,
       };
     });
-  }, [foodLog]);
+  }, [foodLog, mealPlan?.weekStart, weekRollKey]);
 
   const weightSeries = useMemo(() => {
     const cutoff = startOfLocalDay(new Date());
@@ -499,26 +504,41 @@ export default function DashboardPage() {
                 <CardTitle className="text-sm font-medium text-muted-foreground">
                   Macro split
                 </CardTitle>
+                <CardDescription className="text-[11px]">
+                  Logged today vs plan daily target
+                </CardDescription>
               </CardHeader>
-              <CardContent className="flex flex-wrap gap-2">
-                <Badge
-                  variant="outline"
-                  className="border-[#00ff88]/40 bg-[#00ff88]/10 text-[#00ff88]"
-                >
-                  P {Math.round(todayTotals.protein_g)}g
-                </Badge>
-                <Badge
-                  variant="outline"
-                  className="border-[#00aaff]/40 bg-[#00aaff]/10 text-[#00aaff]"
-                >
-                  C {Math.round(todayTotals.carbs_g)}g
-                </Badge>
-                <Badge
-                  variant="outline"
-                  className="border-[#ffaa00]/40 bg-[#ffaa00]/10 text-[#ffaa00]"
-                >
-                  F {Math.round(todayTotals.fat_g)}g
-                </Badge>
+              <CardContent>
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  <div className="rounded-md border border-[#00ff88]/25 bg-[#00ff88]/5 px-2 py-2">
+                    <p className="font-mono text-sm font-semibold text-[#00ff88]">
+                      P {Math.round(todayTotals.protein_g)}g
+                    </p>
+                    <p className="mt-1 font-mono text-[11px] text-muted-foreground">
+                      {proteinTarget != null
+                        ? `target ${Math.round(proteinTarget)}g`
+                        : "—"}
+                    </p>
+                  </div>
+                  <div className="rounded-md border border-[#00aaff]/25 bg-[#00aaff]/5 px-2 py-2">
+                    <p className="font-mono text-sm font-semibold text-[#00aaff]">
+                      C {Math.round(todayTotals.carbs_g)}g
+                    </p>
+                    <p className="mt-1 font-mono text-[11px] text-muted-foreground">
+                      {carbsTarget != null
+                        ? `target ${Math.round(carbsTarget)}g`
+                        : "—"}
+                    </p>
+                  </div>
+                  <div className="rounded-md border border-[#ffaa00]/25 bg-[#ffaa00]/5 px-2 py-2">
+                    <p className="font-mono text-sm font-semibold text-[#ffaa00]">
+                      F {Math.round(todayTotals.fat_g)}g
+                    </p>
+                    <p className="mt-1 font-mono text-[11px] text-muted-foreground">
+                      {fatTarget != null ? `target ${Math.round(fatTarget)}g` : "—"}
+                    </p>
+                  </div>
+                </div>
               </CardContent>
             </Card>
 

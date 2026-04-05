@@ -56,10 +56,13 @@ const generateMealPlan: AtlasTool = {
     name: "generate_meal_plan",
     description:
       "Generate a complete weekly meal plan and save it to the database. " +
-      "BLOOD WORK: Before setting macroTargets and meals, read the user's **Latest blood panels** in context (most recent structured upload). Prioritize **flagged** analytes and follow the 'How to use these labs' guidance (lipids, glucose, sodium, etc.). " +
+      "Use after weekly check-ins and whenever the user needs a new week: **shoppingList** and **prepGuide** must match the new **meals** (regenerate both; do not reuse an old list). " +
+      "BLOOD WORK + USER UPDATES: Before setting macroTargets and meals, read **Latest blood panels** in context and fold in anything the user just said in this conversation (check-in, preferences, adherence). Prioritize **flagged** analytes and follow the 'How to use these labs' guidance (lipids, glucose, sodium, etc.). " +
       "CRITICAL CALORIE RULE: macroTargets contains the TOTAL daily budget. " +
       "The calories/macros for each individual meal (Breakfast, Lunch, Dinner, Snack) must be a PORTION of that daily total — " +
       "they must sum to approximately the daily target, NOT each equal it. " +
+      "MACRO PRIORITY: Per day, stay **at or under fat_g** in macroTargets whenever possible—do not pad missing calories with extra fat. " +
+      "If calories are still short, add **protein first** (lean), then carbs; increase fat only as a last resort and still prefer staying under the fat cap. " +
       "For example if the daily target is 2000 kcal, a reasonable split is: Breakfast 450, Lunch 600, Dinner 700, Snack 250. " +
       "NEVER assign the full day's calorie target to a single meal. " +
       "IMPORTANT: meals must be keyed by full day name (Sunday, Monday, Tuesday, Wednesday, Thursday, Friday, Saturday) " +
@@ -325,7 +328,9 @@ const generateWorkoutPlan: AtlasTool = {
   definition: {
     name: "generate_workout_plan",
     description:
-      "Generate a complete weekly workout plan with exercises for each day. Saves directly to the database.",
+      "Generate a complete weekly workout plan with exercises for each day. Saves directly to the database. " +
+      "After weekly check-ins, call this for the **current** local week alongside an updated meal plan. " +
+      "Read **Latest blood panels** in user context (recovery, energy, flagged markers) and the user's check-in message; adjust volume, intensity, and focus accordingly (general fitness only — not medical clearance).",
     input_schema: {
       type: "object" as const,
       properties: {

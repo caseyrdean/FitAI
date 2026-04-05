@@ -5,6 +5,8 @@ import { runAtlas } from "@/lib/atlas/agent";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+/** Long check-ins (meal + workout tools) can exceed default serverless limits on Vercel. */
+export const maxDuration = 300;
 
 export async function GET() {
   const [conversation, profile] = await Promise.all([
@@ -125,6 +127,9 @@ async function saveResponseInBackground(
         if (!line.startsWith("data: ")) continue;
         try {
           const event = JSON.parse(line.slice(6));
+          if (event.type === "text" && typeof event.content === "string") {
+            fullContent += event.content;
+          }
           if (event.type === "done") {
             fullContent = event.content || fullContent;
             toolCalls = event.toolCalls || null;

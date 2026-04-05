@@ -5,11 +5,8 @@ import { MealPlan, type MealPlanApi } from "@/components/meal-plan";
 import { FoodLog, type FoodLogEntryApi, type FoodLogNutrients } from "@/components/food-log";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAtlasRefresh } from "@/hooks/use-atlas-refresh";
-import {
-  currentLocalWeekDateKeys,
-  FOOD_LOG_SYNC_DAYS,
-} from "@/lib/local-week";
-import { localDateKeyFromLoggedAt } from "@/lib/nutrients/micronutrients";
+import { FOOD_LOG_SYNC_DAYS, trackingWeekDateKeysForMealPlan } from "@/lib/local-week";
+import { localDateKeyFromLoggedAt, todayLocalDateKey } from "@/lib/nutrients/micronutrients";
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -106,8 +103,12 @@ export default function MealsDashboardPage() {
 
   const targets = useMemo(() => readMacroTargets(plan?.macroTargets), [plan]);
 
+  /** Recomputed when the local calendar day changes so week keys roll at Sun→Mon without needing a new `entries` fetch. */
+  const weekRollKey = todayLocalDateKey();
+
   const weekTotals = useMemo(() => {
-    const weekKeySet = new Set(currentLocalWeekDateKeys());
+    const keys = trackingWeekDateKeysForMealPlan(plan?.weekStart ?? null, new Date());
+    const weekKeySet = new Set(keys);
     let calories = 0;
     let protein_g = 0;
     let carbs_g = 0;
@@ -121,7 +122,7 @@ export default function MealsDashboardPage() {
       if (n.fat_g != null) fat_g += n.fat_g;
     }
     return { calories, protein_g, carbs_g, fat_g };
-  }, [entries]);
+  }, [entries, plan?.weekStart, weekRollKey]);
 
   const weekTargets = useMemo(
     () => ({

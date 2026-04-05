@@ -98,6 +98,12 @@ export function planDayIndexFromWeekStart(weekStartIso: string, ref: Date = new 
 /** YYYY-MM-DD for each day in the local Sunday–Saturday week that contains `ref`. */
 export function currentLocalWeekDateKeys(ref: Date = new Date()): string[] {
   const ws = startOfLocalWeekSunday(ref);
+  return localWeekDateKeysFromSunday(ws);
+}
+
+/** Build Sun–Sat keys from a known Sunday (local, start-of-day). */
+export function localWeekDateKeysFromSunday(sundayStart: Date): string[] {
+  const ws = toLocalDateOnly(sundayStart);
   const keys: string[] = [];
   for (let i = 0; i < 7; i++) {
     const d = new Date(ws.getFullYear(), ws.getMonth(), ws.getDate() + i);
@@ -107,6 +113,21 @@ export function currentLocalWeekDateKeys(ref: Date = new Date()): string[] {
     keys.push(`${y}-${m}-${day}`);
   }
   return keys;
+}
+
+/**
+ * Date keys for the meal-plan week when `weekStartIso` contains `ref` locally; otherwise
+ * the calendar week that contains `ref`. Keeps totals aligned with the active plan.
+ */
+export function trackingWeekDateKeysForMealPlan(
+  weekStartIso: string | null | undefined,
+  ref: Date = new Date(),
+): string[] {
+  if (weekStartIso && localDayInPlanWeek(ref, weekStartIso)) {
+    const planSunday = parseWeekStartToLocalSunday(String(weekStartIso), ref);
+    return localWeekDateKeysFromSunday(planSunday);
+  }
+  return currentLocalWeekDateKeys(ref);
 }
 
 /** Shared window for food-log GET so dashboard, meals, nutrients, and list stay in sync. */
