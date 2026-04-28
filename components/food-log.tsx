@@ -6,10 +6,12 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
+  buildNutrientsPayloadFromPlanMeal,
   getPlannedMealsForLocalDate,
   type MealPlanApi,
   type PlanMeal,
 } from "@/components/meal-plan";
+import { useAtlasRefresh } from "@/hooks/use-atlas-refresh";
 import { dispatchFitaiRefresh } from "@/lib/fitai-refresh";
 import { FOOD_LOG_SYNC_DAYS, formatLocalWeekRangeLabel } from "@/lib/local-week";
 import {
@@ -37,10 +39,13 @@ export type FoodLogEntryApi = {
   loggedAt: string;
   description: string;
   mealType: string;
+  entryKind?: string;
   nutrients: FoodLogNutrients | Record<string, unknown>;
 };
 
 const MEAL_TYPES = ["Breakfast", "Lunch", "Dinner", "Snack"] as const;
+
+const SUPPLEMENT_UNITS = ["IU", "mg", "mcg", "g"] as const;
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -107,6 +112,14 @@ type FoodLogProps = {
   onAfterLog?: () => void;
   /** When omitted, the food log loads `/api/meals` itself. Pass from parent to avoid duplicate fetch. */
   mealPlan?: MealPlanApi | null;
+  refreshToken?: number;
+};
+
+type MacroTargets = {
+  calories?: number;
+  protein_g?: number;
+  carbs_g?: number;
+  fat_g?: number;
 };
 
 function plannedMealTitle(meal: PlanMeal): string {
@@ -125,7 +138,39 @@ function buildPlanLogDescription(mealType: string, meal: PlanMeal): string {
   return parts.join(" — ");
 }
 
-export function FoodLog({ onAfterLog, mealPlan: mealPlanProp }: FoodLogProps) {
+function startOfLocalDay(d: Date): Date {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+
+function localDateKey(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function parseMacroTargets(raw: unknown): MacroTargets {
+  if (!isRecord(raw)) return {};
+  const num = (k: string): number | undefined => {
+    const v = raw[k];
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+    if (typeof v === "string" && v.trim() !== "") {
+      const n = Number(v);
+      if (Number.isFinite(n)) return n;
+    }
+    return undefined;
+  };
+  return {
+    calories: num("calories") ?? num("daily_calories"),
+    protein_g: num("protein_g") ?? num("protein"),
+    carbs_g: num("carbs_g") ?? num("carbs"),
+    fat_g: num("fat_g") ?? num("fat"),
+  };
+}
+
+export function FoodLog({ onAfterLog, mealPlan: mealPlanProp, refreshToken }: FoodLogProps) {
   const [entries, setEntries] = useState<FoodLogEntryApi[]>([]);
   const [planFetched, setPlanFetched] = useState<MealPlanApi | null>(null);
   const [planLoading, setPlanLoading] = useState(mealPlanProp === undefined);
@@ -138,6 +183,14 @@ export function FoodLog({ onAfterLog, mealPlan: mealPlanProp }: FoodLogProps) {
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [quickAdding, setQuickAdding] = useState<string | null>(null);
+  const [supKind, setSupKind] = useState("");
+  const [supAmount, setSupAmount] = useState("");
+  const [supUnit, setSupUnit] = useState<string>(SUPPLEMENT_UNITS[1]);
+  const [supSubmitting, setSupSubmitting] = useState(false);
+  const [supKcal, setSupKcal] = useState("");
+  const [supProtein, setSupProtein] = useState("");
+  const [supCarbs, setSupCarbs] = useState("");
+  const [supFat, setSupFat] = useState("");
 
   const effectivePlan = mealPlanProp !== undefined ? mealPlanProp : planFetched;
 
@@ -150,7 +203,7 @@ export function FoodLog({ onAfterLog, mealPlan: mealPlanProp }: FoodLogProps) {
     (async () => {
       setPlanLoading(true);
       try {
-        const res = await fetch("/api/meals");
+        const res = await fetch("/api/meals", { cache: "no-store" });
         if (!res.ok) {
           if (!cancelled) setPlanFetched(null);
           return;
@@ -190,7 +243,16 @@ export function FoodLog({ onAfterLog, mealPlan: mealPlanProp }: FoodLogProps) {
     }
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void load();
+  }, [load, refreshToken]);
+
+  useAtlasRefresh(
+    () => {
+      void load();
+    },
+    { scopes: ["foodlog", "meals", "supplements"] },
+  );
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -211,12 +273,82 @@ export function FoodLog({ onAfterLog, mealPlan: mealPlanProp }: FoodLogProps) {
       }
       setDescription("");
       await load();
-      dispatchFitaiRefresh({ source: "foodlog" });
+      dispatchFitaiRefresh({ source: "foodlog", scopes: ["foodlog", "meals", "dashboard"] });
       onAfterLog?.();
     } catch {
       setError("Failed to log food");
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const buildOptionalSupplementMacros = (): Record<string, number> | undefined => {
+    const parseOpt = (s: string) => {
+      if (!s.trim()) return undefined;
+      const n = parseFloat(s);
+      return Number.isFinite(n) ? n : undefined;
+    };
+    const calories = parseOpt(supKcal);
+    const protein_g = parseOpt(supProtein);
+    const carbs_g = parseOpt(supCarbs);
+    const fat_g = parseOpt(supFat);
+    if (
+      calories == null &&
+      protein_g == null &&
+      carbs_g == null &&
+      fat_g == null
+    ) {
+      return undefined;
+    }
+    return {
+      ...(calories != null ? { calories } : {}),
+      ...(protein_g != null ? { protein_g } : {}),
+      ...(carbs_g != null ? { carbs_g } : {}),
+      ...(fat_g != null ? { fat_g } : {}),
+    };
+  };
+
+  const logSupplement = async (e: FormEvent) => {
+    e.preventDefault();
+    const kind = supKind.trim();
+    const amt = parseFloat(supAmount);
+    if (!kind || !Number.isFinite(amt) || amt <= 0 || supSubmitting) return;
+    setSupSubmitting(true);
+    setError(null);
+    try {
+      const description = `${kind} — ${amt} ${supUnit} (supplement)`;
+      const macroOver = buildOptionalSupplementMacros();
+      const res = await fetch("/api/foodlog", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          entryKind: "supplement",
+          description,
+          mealType,
+          supplement: { kind, amount: amt, unit: supUnit },
+          ...(macroOver && Object.keys(macroOver).length > 0
+            ? { supplementMacros: macroOver }
+            : {}),
+        }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { error?: string } | null;
+        setError(body?.error ?? "Failed to log supplement");
+        return;
+      }
+      setSupKind("");
+      setSupAmount("");
+      setSupKcal("");
+      setSupProtein("");
+      setSupCarbs("");
+      setSupFat("");
+      await load();
+      dispatchFitaiRefresh({ source: "foodlog", scopes: ["foodlog", "supplements", "dashboard"] });
+      onAfterLog?.();
+    } catch {
+      setError("Failed to log supplement");
+    } finally {
+      setSupSubmitting(false);
     }
   };
 
@@ -226,10 +358,15 @@ export function FoodLog({ onAfterLog, mealPlan: mealPlanProp }: FoodLogProps) {
     setError(null);
     try {
       const description = buildPlanLogDescription(mealType, meal);
+      const fromPlan = buildNutrientsPayloadFromPlanMeal(meal);
       const res = await fetch("/api/foodlog", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ description, mealType }),
+        body: JSON.stringify({
+          description,
+          mealType,
+          ...(fromPlan ? { nutrients: fromPlan } : {}),
+        }),
       });
       if (!res.ok) {
         const errBody = (await res.json().catch(() => null)) as { error?: string } | null;
@@ -237,7 +374,7 @@ export function FoodLog({ onAfterLog, mealPlan: mealPlanProp }: FoodLogProps) {
         return;
       }
       await load();
-      dispatchFitaiRefresh({ source: "foodlog" });
+      dispatchFitaiRefresh({ source: "foodlog", scopes: ["foodlog", "meals", "dashboard"] });
       onAfterLog?.();
     } catch {
       setError("Failed to log meal");
@@ -295,7 +432,7 @@ export function FoodLog({ onAfterLog, mealPlan: mealPlanProp }: FoodLogProps) {
       }
       setEditState(null);
       await load();
-      dispatchFitaiRefresh({ source: "foodlog" });
+      dispatchFitaiRefresh({ source: "foodlog", scopes: ["foodlog", "meals", "dashboard"] });
       onAfterLog?.();
     } catch {
       setError("Failed to save changes");
@@ -316,7 +453,7 @@ export function FoodLog({ onAfterLog, mealPlan: mealPlanProp }: FoodLogProps) {
         return;
       }
       await load();
-      dispatchFitaiRefresh({ source: "foodlog" });
+      dispatchFitaiRefresh({ source: "foodlog", scopes: ["foodlog", "meals", "dashboard"] });
       onAfterLog?.();
     } catch {
       setError("Failed to delete entry");
@@ -327,13 +464,85 @@ export function FoodLog({ onAfterLog, mealPlan: mealPlanProp }: FoodLogProps) {
 
   // Shared input style for edit cells
   const editInput = "h-7 w-full border-neon-green/40 bg-surface-dark text-sm text-white";
+  const todayKey = localDateKey(startOfLocalDay(new Date()));
+  const todayTotals = useMemo(() => {
+    let calories = 0;
+    let protein_g = 0;
+    let carbs_g = 0;
+    let fat_g = 0;
+    for (const row of entries) {
+      if (localDateKey(new Date(row.loggedAt)) !== todayKey) continue;
+      const n = parseNutrients(row.nutrients);
+      calories += n.calories ?? 0;
+      protein_g += n.protein_g ?? 0;
+      carbs_g += n.carbs_g ?? 0;
+      fat_g += n.fat_g ?? 0;
+    }
+    return { calories, protein_g, carbs_g, fat_g };
+  }, [entries, todayKey]);
+  const macroTargets = useMemo(
+    () => parseMacroTargets(effectivePlan?.macroTargets),
+    [effectivePlan?.macroTargets],
+  );
+  const snapshotRows = [
+    {
+      label: "Calories",
+      value: Math.round(todayTotals.calories),
+      target: macroTargets.calories != null ? Math.round(macroTargets.calories) : null,
+      valueSuffix: "kcal",
+      accent: "text-neon-green",
+    },
+    {
+      label: "Protein",
+      value: Math.round(todayTotals.protein_g),
+      target: macroTargets.protein_g != null ? Math.round(macroTargets.protein_g) : null,
+      valueSuffix: "g",
+      accent: "text-neon-blue",
+    },
+    {
+      label: "Carbs",
+      value: Math.round(todayTotals.carbs_g),
+      target: macroTargets.carbs_g != null ? Math.round(macroTargets.carbs_g) : null,
+      valueSuffix: "g",
+      accent: "text-gray-200",
+    },
+    {
+      label: "Fat",
+      value: Math.round(todayTotals.fat_g),
+      target: macroTargets.fat_g != null ? Math.round(macroTargets.fat_g) : null,
+      valueSuffix: "g",
+      accent: "text-neon-amber",
+    },
+  ] as const;
+  const hasAnyTarget = snapshotRows.some((r) => r.target != null);
+  const todayEntries = useMemo(
+    () =>
+      entries
+        .filter((row) => localDateKey(new Date(row.loggedAt)) === todayKey)
+        .sort(
+          (a, b) =>
+            new Date(a.loggedAt).getTime() - new Date(b.loggedAt).getTime(),
+        ),
+    [entries, todayKey],
+  );
+  const remainingPlannedSlots = useMemo(() => {
+    if (!todayPlanned || todayPlanned.outsidePlanWeek) return [];
+    const loggedMealTypes = new Set(
+      todayEntries
+        .filter((e) => e.entryKind !== "supplement")
+        .map((e) => e.mealType.trim().toLowerCase()),
+    );
+    return todayPlanned.slots.filter(
+      ({ mealType }) => !loggedMealTypes.has(mealType.toLowerCase()),
+    );
+  }, [todayEntries, todayPlanned]);
 
   return (
     <Card className="border-surface-border bg-surface-light/80 text-card-foreground">
       <CardHeader className="border-b border-surface-border pb-4">
-        <CardTitle className="text-lg text-white">Food log</CardTitle>
+        <CardTitle className="text-lg text-white">Food &amp; supplement log</CardTitle>
         <div className="text-xs text-muted-foreground">
-          Quick log and recent entries. Nutrients are{" "}
+          Log meals and supplements; supplements add micronutrients to the Nutrients tab. Values are{" "}
           <Badge variant="outline" className="ml-1 border-neon-green/40 text-neon-green">
             ~est.
           </Badge>
@@ -485,6 +694,259 @@ export function FoodLog({ onAfterLog, mealPlan: mealPlanProp }: FoodLogProps) {
           </Button>
         </form>
 
+        <form
+          onSubmit={(ev) => void logSupplement(ev)}
+          className="rounded-lg border border-surface-border bg-surface-dark/30 p-4"
+        >
+          <h3 className="text-sm font-semibold text-white">Log supplement</h3>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Generic type only (e.g. vitamin D3, protein powder, fish oil). We estimate{" "}
+            <span className="text-white/80">macros and micros</span> for the dose (oil softgels,
+            powders, gummies, etc.). Optional fields below override AI macros from your label.
+          </p>
+          <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+            <div className="min-w-[160px] flex-1 space-y-1">
+              <label htmlFor="sup-kind" className="text-xs font-medium text-muted-foreground">
+                Supplement
+              </label>
+              <Input
+                id="sup-kind"
+                placeholder="e.g. Vitamin D3"
+                value={supKind}
+                onChange={(e) => setSupKind(e.target.value)}
+                disabled={supSubmitting}
+                className="border-surface-border bg-surface-dark text-white placeholder:text-muted-foreground"
+              />
+            </div>
+            <div className="w-24 space-y-1">
+              <label htmlFor="sup-amt" className="text-xs font-medium text-muted-foreground">
+                Amount
+              </label>
+              <Input
+                id="sup-amt"
+                type="number"
+                min={0}
+                step="any"
+                placeholder="2000"
+                value={supAmount}
+                onChange={(e) => setSupAmount(e.target.value)}
+                disabled={supSubmitting}
+                className="border-surface-border bg-surface-dark text-white placeholder:text-muted-foreground"
+              />
+            </div>
+            <div className="w-28 space-y-1">
+              <label htmlFor="sup-unit" className="text-xs font-medium text-muted-foreground">
+                Unit
+              </label>
+              <select
+                id="sup-unit"
+                value={supUnit}
+                onChange={(e) => setSupUnit(e.target.value)}
+                disabled={supSubmitting}
+                className="flex h-10 w-full rounded-md border border-surface-border bg-surface-dark px-3 py-2 text-sm text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-green/40"
+              >
+                {SUPPLEMENT_UNITS.map((u) => (
+                  <option key={u} value={u} className="bg-surface-dark">
+                    {u}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <Button
+              type="submit"
+              disabled={
+                supSubmitting || !supKind.trim() || !supAmount.trim() || !!editState
+              }
+              variant="outline"
+              className="border-neon-blue/50 text-neon-blue hover:bg-neon-blue/10"
+            >
+              {supSubmitting ? "Logging…" : "Log supplement"}
+            </Button>
+          </div>
+          <p className="mt-3 text-[11px] font-medium text-muted-foreground">
+            Optional — macros from label (~est., override AI)
+          </p>
+          <div className="mt-1.5 grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <div className="space-y-1">
+              <label htmlFor="sup-kcal" className="text-[10px] text-muted-foreground">
+                kcal
+              </label>
+              <Input
+                id="sup-kcal"
+                type="number"
+                min={0}
+                step="any"
+                placeholder="—"
+                value={supKcal}
+                onChange={(e) => setSupKcal(e.target.value)}
+                disabled={supSubmitting}
+                className="h-9 border-surface-border bg-surface-dark text-sm text-white"
+              />
+            </div>
+            <div className="space-y-1">
+              <label htmlFor="sup-p" className="text-[10px] text-muted-foreground">
+                Protein g
+              </label>
+              <Input
+                id="sup-p"
+                type="number"
+                min={0}
+                step="any"
+                placeholder="—"
+                value={supProtein}
+                onChange={(e) => setSupProtein(e.target.value)}
+                disabled={supSubmitting}
+                className="h-9 border-surface-border bg-surface-dark text-sm text-white"
+              />
+            </div>
+            <div className="space-y-1">
+              <label htmlFor="sup-c" className="text-[10px] text-muted-foreground">
+                Carbs g
+              </label>
+              <Input
+                id="sup-c"
+                type="number"
+                min={0}
+                step="any"
+                placeholder="—"
+                value={supCarbs}
+                onChange={(e) => setSupCarbs(e.target.value)}
+                disabled={supSubmitting}
+                className="h-9 border-surface-border bg-surface-dark text-sm text-white"
+              />
+            </div>
+            <div className="space-y-1">
+              <label htmlFor="sup-f" className="text-[10px] text-muted-foreground">
+                Fat g
+              </label>
+              <Input
+                id="sup-f"
+                type="number"
+                min={0}
+                step="any"
+                placeholder="—"
+                value={supFat}
+                onChange={(e) => setSupFat(e.target.value)}
+                disabled={supSubmitting}
+                className="h-9 border-surface-border bg-surface-dark text-sm text-white"
+              />
+            </div>
+          </div>
+        </form>
+
+        <div className="rounded-lg border border-surface-border bg-surface-dark/30 p-4">
+          <h3 className="text-sm font-semibold text-white">Today&apos;s intake snapshot</h3>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Logged today (meals + supplements) vs your daily meal-plan targets. Values are{" "}
+            <span className="text-neon-green">~est.</span>
+          </p>
+          <div className="mt-3 overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow className="border-surface-border hover:bg-transparent">
+                  <TableHead className="text-muted-foreground">Metric</TableHead>
+                  <TableHead className="text-muted-foreground">Logged today</TableHead>
+                  <TableHead className="text-muted-foreground">Daily target</TableHead>
+                  <TableHead className="text-muted-foreground">Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {snapshotRows.map((row) => {
+                  const delta =
+                    row.target != null ? row.target - row.value : null;
+                  return (
+                    <TableRow key={row.label} className="border-surface-border">
+                      <TableCell className="text-white">{row.label}</TableCell>
+                      <TableCell>
+                        <span className={row.accent}>
+                          {row.value.toLocaleString()}
+                          {row.valueSuffix}
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-gray-300">
+                        {row.target != null
+                          ? `${row.target.toLocaleString()}${row.valueSuffix}`
+                          : "—"}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {delta == null
+                          ? "No target yet"
+                          : delta > 0
+                            ? `${Math.abs(delta).toLocaleString()}${row.valueSuffix} remaining`
+                            : delta < 0
+                              ? `${Math.abs(delta).toLocaleString()}${row.valueSuffix} over`
+                              : "On target"}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </div>
+          {!hasAnyTarget && (
+            <p className="mt-2 text-xs text-muted-foreground">
+              No daily macro target found for this week yet. Ask Atlas to regenerate your current
+              week plan.
+            </p>
+          )}
+          <div className="mt-4 grid gap-4 lg:grid-cols-2">
+            <div className="rounded-md border border-surface-border bg-surface/40 p-3">
+              <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Today&apos;s entries
+              </h4>
+              {todayEntries.length === 0 ? (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Nothing logged yet today.
+                </p>
+              ) : (
+                <ul className="mt-2 space-y-1.5">
+                  {todayEntries.map((entry) => (
+                    <li
+                      key={entry.id}
+                      className="flex items-start justify-between gap-2 text-xs"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-white">{entry.description}</p>
+                        <p className="text-muted-foreground">
+                          {entry.mealType}
+                          {entry.entryKind === "supplement" ? " · supplement" : ""}
+                        </p>
+                      </div>
+                      <span className="shrink-0 text-muted-foreground">
+                        {formatTime(entry.loggedAt)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div className="rounded-md border border-surface-border bg-surface/40 p-3">
+              <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Still to eat today
+              </h4>
+              {!todayPlanned || todayPlanned.outsidePlanWeek ? (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Today is outside the loaded meal-plan week.
+                </p>
+              ) : remainingPlannedSlots.length === 0 ? (
+                <p className="mt-2 text-xs text-neon-green">
+                  All planned meal slots are logged for today.
+                </p>
+              ) : (
+                <ul className="mt-2 space-y-1.5">
+                  {remainingPlannedSlots.map(({ mealType, meal }, idx) => (
+                    <li key={`${mealType}-${idx}`} className="text-xs">
+                      <span className="text-neon-blue">{mealType}</span>
+                      <span className="text-muted-foreground"> · </span>
+                      <span className="text-white">{plannedMealTitle(meal)}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        </div>
+
         {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
 
         <div>
@@ -511,6 +973,7 @@ export function FoodLog({ onAfterLog, mealPlan: mealPlanProp }: FoodLogProps) {
                 <TableBody>
                   {entries.map((row) => {
                     const n = parseNutrients(row.nutrients);
+                    const isSupplement = row.entryKind === "supplement";
                     const isEditing = editState?.id === row.id;
                     const isDeleting = deletingId === row.id;
 
@@ -543,7 +1006,17 @@ export function FoodLog({ onAfterLog, mealPlan: mealPlanProp }: FoodLogProps) {
                               autoFocus
                             />
                           ) : (
-                            <span className="text-white">{row.description}</span>
+                            <div className="flex flex-col gap-1">
+                              {isSupplement && (
+                                <Badge
+                                  variant="outline"
+                                  className="w-fit border-neon-blue/45 text-[10px] text-neon-blue"
+                                >
+                                  Supplement
+                                </Badge>
+                              )}
+                              <span className="text-white">{row.description}</span>
+                            </div>
                           )}
                         </TableCell>
 
@@ -576,11 +1049,22 @@ export function FoodLog({ onAfterLog, mealPlan: mealPlanProp }: FoodLogProps) {
                               placeholder="kcal"
                             />
                           ) : (
-                            <div className="flex items-center gap-1">
-                              <span className="text-neon-green">
-                                {n.calories != null ? Math.round(n.calories) : "—"}
-                              </span>
-                              <Badge variant="outline" className="border-neon-green/30 px-1.5 py-0 text-[10px] text-neon-green">~est.</Badge>
+                            <div className="flex flex-col items-start gap-0.5">
+                              <div className="flex items-center gap-1">
+                                <span className="text-neon-green">
+                                  {n.calories != null && n.calories > 0
+                                    ? Math.round(n.calories)
+                                    : isSupplement
+                                      ? "0"
+                                      : "—"}
+                                </span>
+                                <Badge variant="outline" className="border-neon-green/30 px-1.5 py-0 text-[10px] text-neon-green">~est.</Badge>
+                              </div>
+                              {isSupplement && (
+                                <span className="text-[10px] text-muted-foreground">
+                                  in week totals (Meals &amp; Nutrients)
+                                </span>
+                              )}
                             </div>
                           )}
                         </TableCell>
@@ -599,7 +1083,13 @@ export function FoodLog({ onAfterLog, mealPlan: mealPlanProp }: FoodLogProps) {
                           ) : (
                             <div className="flex items-center gap-1">
                               <span className="text-neon-blue">
-                                {n.protein_g != null ? `${Math.round(n.protein_g)}g` : "—"}
+                                {isSupplement
+                                  ? n.protein_g != null && n.protein_g > 0
+                                    ? `${Math.round(n.protein_g)}g`
+                                    : "—"
+                                  : n.protein_g != null
+                                    ? `${Math.round(n.protein_g)}g`
+                                    : "—"}
                               </span>
                               <Badge variant="outline" className="border-neon-blue/30 px-1.5 py-0 text-[10px] text-neon-blue">~est.</Badge>
                             </div>
@@ -620,7 +1110,13 @@ export function FoodLog({ onAfterLog, mealPlan: mealPlanProp }: FoodLogProps) {
                           ) : (
                             <div className="flex items-center gap-1">
                               <span className="text-gray-200">
-                                {n.carbs_g != null ? `${Math.round(n.carbs_g)}g` : "—"}
+                                {isSupplement
+                                  ? n.carbs_g != null && n.carbs_g > 0
+                                    ? `${Math.round(n.carbs_g)}g`
+                                    : "—"
+                                  : n.carbs_g != null
+                                    ? `${Math.round(n.carbs_g)}g`
+                                    : "—"}
                               </span>
                               <Badge variant="outline" className="border-muted-foreground/40 px-1.5 py-0 text-[10px]">~est.</Badge>
                             </div>
@@ -641,7 +1137,13 @@ export function FoodLog({ onAfterLog, mealPlan: mealPlanProp }: FoodLogProps) {
                           ) : (
                             <div className="flex items-center gap-1">
                               <span className="text-neon-amber">
-                                {n.fat_g != null ? `${Math.round(n.fat_g)}g` : "—"}
+                                {isSupplement
+                                  ? n.fat_g != null && n.fat_g > 0
+                                    ? `${Math.round(n.fat_g)}g`
+                                    : "—"
+                                  : n.fat_g != null
+                                    ? `${Math.round(n.fat_g)}g`
+                                    : "—"}
                               </span>
                               <Badge variant="outline" className="border-neon-amber/40 px-1.5 py-0 text-[10px] text-neon-amber">~est.</Badge>
                             </div>

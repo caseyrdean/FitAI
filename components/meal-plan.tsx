@@ -1,10 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useAtlasRefresh } from "@/hooks/use-atlas-refresh";
+import { dispatchFitaiRefresh } from "@/lib/fitai-refresh";
 import {
   formatLocalWeekRangeLabel,
   localDayInPlanWeek,
 } from "@/lib/local-week";
+import {
+  buildCanonicalShoppingListFromMealPlanMeals,
+  parsePersistedShoppingList,
+} from "@/lib/shopping/normalize";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -31,10 +37,49 @@ export type PlanMeal = {
   fiber_g?: number;
   ingredients?: string[];
   prepTime?: string;
-  /** Estimated micronutrients for this meal (~est.) — shown in the plan; food log entries get separate estimates from description text. */
+  /** Estimated micronutrients for this meal (~est.) — quick-add from plan copies these into the food log. */
   vitamins?: Record<string, number>;
   minerals?: Record<string, number>;
 };
+
+/**
+ * Build food-log `nutrients` JSON from a planned meal so logged totals match the plan.
+ * Returns null if calories or any macro gram field is missing (caller should use AI estimate).
+ */
+export function buildNutrientsPayloadFromPlanMeal(
+  meal: PlanMeal,
+): Record<string, unknown> | null {
+  const { calories, protein_g, carbs_g, fat_g, fiber_g, vitamins, minerals } =
+    meal;
+  if (
+    calories == null ||
+    !Number.isFinite(calories) ||
+    protein_g == null ||
+    !Number.isFinite(protein_g) ||
+    carbs_g == null ||
+    !Number.isFinite(carbs_g) ||
+    fat_g == null ||
+    !Number.isFinite(fat_g)
+  ) {
+    return null;
+  }
+  const out: Record<string, unknown> = {
+    calories,
+    protein_g,
+    carbs_g,
+    fat_g,
+  };
+  if (fiber_g != null && Number.isFinite(fiber_g)) {
+    out.fiber_g = fiber_g;
+  }
+  if (vitamins && Object.keys(vitamins).length > 0) {
+    out.vitamins = { ...vitamins };
+  }
+  if (minerals && Object.keys(minerals).length > 0) {
+    out.minerals = { ...minerals };
+  }
+  return out;
+}
 
 export type MealPlanApi = {
   id: string;
@@ -594,6 +639,15 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
+function toFiniteNumberFromScalar(v: unknown): number | undefined {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string" && v.trim() !== "") {
+    const n = Number(v);
+    if (Number.isFinite(n)) return n;
+  }
+  return undefined;
+}
+
 function parseNumericRecordField(raw: unknown): Record<string, number> | undefined {
   if (!isRecord(raw)) return undefined;
   const out: Record<string, number> = {};
@@ -643,10 +697,10 @@ function parseMeal(raw: unknown): PlanMeal {
   const micro = coalesceMicronutrientsFromMealRaw(raw);
   return {
     name: typeof raw.name === "string" ? raw.name : undefined,
-    calories: typeof raw.calories === "number" ? raw.calories : undefined,
-    protein_g: typeof raw.protein_g === "number" ? raw.protein_g : undefined,
-    carbs_g: typeof raw.carbs_g === "number" ? raw.carbs_g : undefined,
-    fat_g: typeof raw.fat_g === "number" ? raw.fat_g : undefined,
+    calories: toFiniteNumberFromScalar(raw.calories),
+    protein_g: toFiniteNumberFromScalar(raw.protein_g),
+    carbs_g: toFiniteNumberFromScalar(raw.carbs_g),
+    fat_g: toFiniteNumberFromScalar(raw.fat_g),
     fiber_g: micro.fiber_g,
     ingredients: Array.isArray(raw.ingredients)
       ? raw.ingredients.filter((i): i is string => typeof i === "string")
@@ -757,9 +811,9 @@ function WeekLabel({ plan }: { plan: MealPlanApi }) {
 
 // ─── component ────────────────────────────────────────────────────────────────
 
-type MealPlanProps = { onAfterSwap?: () => void };
+type MealPlanProps = { onAfterSwap?: () => void; refreshToken?: number };
 
-export function MealPlan({ onAfterSwap }: MealPlanProps) {
+export function MealPlan({ onAfterSwap, refreshToken }: MealPlanProps) {
   const [plan, setPlan] = useState<MealPlanApi | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -769,9 +823,16 @@ export function MealPlan({ onAfterSwap }: MealPlanProps) {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/meals");
+      const res = await fetch("/api/meals", { cache: "no-store" });
+      // #region agent log
+      fetch('http://127.0.0.1:7702/ingest/8b876957-51d4-454d-9a7e-692ba8eff35d',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'08b46b'},body:JSON.stringify({sessionId:'08b46b',runId:'initial',hypothesisId:'H5',location:'components/meal-plan.tsx:load:response',message:'meal plan component fetch response',data:{ok:res.ok,status:res.status},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
       if (!res.ok) { setError("Could not load meal plan"); setPlan(null); return; }
-      setPlan((await res.json()) as MealPlanApi | null);
+      const payload = (await res.json()) as MealPlanApi | null;
+      // #region agent log
+      fetch('http://127.0.0.1:7702/ingest/8b876957-51d4-454d-9a7e-692ba8eff35d',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'08b46b'},body:JSON.stringify({sessionId:'08b46b',runId:'initial',hypothesisId:'H5',location:'components/meal-plan.tsx:load:payload',message:'meal plan component received payload',data:{hasPlan:!!payload,planId:payload?.id??null,weekStart:payload?.weekStart??null,hasMeals:!!payload?.meals},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
+      setPlan(payload);
     } catch {
       setError("Could not load meal plan");
       setPlan(null);
@@ -780,7 +841,16 @@ export function MealPlan({ onAfterSwap }: MealPlanProps) {
     }
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void load();
+  }, [load, refreshToken]);
+
+  useAtlasRefresh(
+    () => {
+      void load();
+    },
+    { scopes: ["meals"] },
+  );
 
   const handleSwap = async (day: string, mealType: string) => {
     const key = `${day}:${mealType}`;
@@ -797,6 +867,7 @@ export function MealPlan({ onAfterSwap }: MealPlanProps) {
         return;
       }
       await load();
+      dispatchFitaiRefresh({ source: "meals", scopes: ["meals", "dashboard"] });
       onAfterSwap?.();
     } catch {
       setError("Swap failed");
@@ -817,8 +888,14 @@ export function MealPlan({ onAfterSwap }: MealPlanProps) {
   );
 
   const shoppingCategories = useMemo(
-    () => buildShoppingList(mealsRoot as Record<string, unknown> | undefined),
-    [mealsRoot],
+    () => {
+      const persisted = parsePersistedShoppingList(plan?.shoppingList);
+      if (persisted) return persisted;
+      return buildCanonicalShoppingListFromMealPlanMeals(
+        mealsRoot as Record<string, unknown> | undefined,
+      );
+    },
+    [mealsRoot, plan?.shoppingList],
   );
 
   const totalItems = useMemo(

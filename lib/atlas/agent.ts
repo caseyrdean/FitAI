@@ -5,6 +5,7 @@ import {
   CHECKIN_PROMPT,
   buildContext,
 } from "./prompts";
+import { startOfLocalWeekSunday } from "@/lib/local-week";
 import { TOOL_DEFINITIONS, getToolByName, type ToolResult } from "./tools";
 
 const anthropic = new Anthropic({
@@ -22,6 +23,17 @@ const ATLAS_MAX_OUTPUT_TOKENS = Math.min(
     parseInt(process.env.ATLAS_MAX_OUTPUT_TOKENS || "16384", 10) || 16384,
   ),
 );
+
+/**
+ * Check-ins often generate both meal and workout plans in one run.
+ * Give these rounds 2x output budget (still capped to Anthropic max).
+ */
+function maxTokensForMode(mode: AtlasInput["mode"]): number {
+  if (mode === "checkin") {
+    return Math.min(64000, ATLAS_MAX_OUTPUT_TOKENS * 2);
+  }
+  return ATLAS_MAX_OUTPUT_TOKENS;
+}
 
 /** Keep last N turns so long threads do not exceed context limits. */
 const ATLAS_MAX_HISTORY_MESSAGES = Math.min(
@@ -46,10 +58,39 @@ export interface AtlasStreamEvent {
   toolCalls?: Array<{ name: string; input: unknown; result: unknown }>;
 }
 
+function localDateKey(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function userOptedOutWorkoutUpdate(input: AtlasInput): boolean {
+  const haystack = [
+    input.message,
+    ...input.conversationHistory
+      .filter((m) => m.role === "user")
+      .map((m) => m.content),
+  ]
+    .join("\n")
+    .toLowerCase();
+  return (
+    /\b(no|skip|dont|don't)\b.{0,30}\b(workout|exercise|training)\b/.test(haystack) ||
+    /\b(workout|exercise|training)\b.{0,30}\b(no|skip|dont|don't)\b/.test(haystack) ||
+    /\bkeep\b.{0,20}\bworkout\b.{0,20}\b(same|unchanged)\b/.test(haystack)
+  );
+}
+
 export function runAtlas(input: AtlasInput): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   const refreshTargets = new Set<string>();
   const toolCallLog: Array<{ name: string; input: unknown; result: unknown }> = [];
+  const currentWeekKey = localDateKey(startOfLocalWeekSunday(new Date()));
+  const workoutOptional = userOptedOutWorkoutUpdate(input);
+  let mealPlanSavedForCurrentWeek = false;
+  let workoutPlanSavedForCurrentWeek = false;
+  let attemptedMealPlanSave = false;
+  let attemptedWorkoutPlanSave = false;
 
   return new ReadableStream({
     async start(controller) {
@@ -96,7 +137,7 @@ export function runAtlas(input: AtlasInput): ReadableStream<Uint8Array> {
           let stoppedForMaxTokens = false;
           const response = await anthropic.messages.create({
             model: ATLAS_MODEL,
-            max_tokens: ATLAS_MAX_OUTPUT_TOKENS,
+            max_tokens: maxTokensForMode(input.mode),
             system: systemPrompt,
             tools: TOOL_DEFINITIONS,
             messages,
@@ -146,9 +187,6 @@ export function runAtlas(input: AtlasInput): ReadableStream<Uint8Array> {
               }
             } else if (event.type === "message_delta") {
               const sr = event.delta.stop_reason;
-              if (sr === "end_turn") {
-                shouldStop = true;
-              }
               if (sr === "max_tokens") {
                 stoppedForMaxTokens = true;
                 if (toolUseBlocks.length === 0) {
@@ -167,7 +205,8 @@ export function runAtlas(input: AtlasInput): ReadableStream<Uint8Array> {
             shouldStop = true;
           }
 
-          if (toolUseBlocks.length > 0 && !shouldStop) {
+          if (toolUseBlocks.length > 0) {
+            // Tool blocks take priority so DB mutations always execute.
             // Build the assistant message with text + tool_use blocks
             const assistantContent: Anthropic.ContentBlockParam[] = [];
             if (currentText) {
@@ -198,12 +237,44 @@ export function runAtlas(input: AtlasInput): ReadableStream<Uint8Array> {
               } catch {
                 parsedInput = {};
               }
+              if (
+                input.mode === "checkin" &&
+                (tb.name === "generate_meal_plan" || tb.name === "generate_workout_plan")
+              ) {
+                parsedInput.weekStart = currentWeekKey;
+              }
+              if (input.mode === "checkin" && tb.name === "generate_meal_plan") {
+                attemptedMealPlanSave = true;
+              }
+              if (input.mode === "checkin" && tb.name === "generate_workout_plan") {
+                attemptedWorkoutPlanSave = true;
+              }
 
               const tool = getToolByName(tb.name);
               let result: ToolResult;
+              let parsedResultForChecks: Record<string, unknown> | null = null;
               if (tool) {
                 try {
                   result = await tool.execute(parsedInput, input.userId);
+                  try {
+                    parsedResultForChecks = JSON.parse(result.content) as Record<string, unknown>;
+                  } catch {
+                    parsedResultForChecks = null;
+                  }
+                  if (input.mode === "checkin" && !result.isError) {
+                    if (tb.name === "generate_meal_plan") {
+                      const wk = parsedResultForChecks?.normalizedWeekStartLocal;
+                      if (typeof wk === "string" && wk === currentWeekKey) {
+                        mealPlanSavedForCurrentWeek = true;
+                      }
+                    }
+                    if (tb.name === "generate_workout_plan") {
+                      const wk = parsedResultForChecks?.normalizedWeekStartLocal;
+                      if (typeof wk === "string" && wk === currentWeekKey) {
+                        workoutPlanSavedForCurrentWeek = true;
+                      }
+                    }
+                  }
                 } catch (error) {
                   result = {
                     content: JSON.stringify({
@@ -225,8 +296,18 @@ export function runAtlas(input: AtlasInput): ReadableStream<Uint8Array> {
                 result: JSON.parse(result.content),
               });
 
-              if (result.refreshTarget) {
-                refreshTargets.add(result.refreshTarget);
+              const rtList =
+                result.refreshTargets?.length && result.refreshTargets.length > 0
+                  ? result.refreshTargets
+                  : result.refreshTarget
+                    ? [result.refreshTarget]
+                    : [];
+              for (const t of rtList) {
+                if (!refreshTargets.has(t)) {
+                  refreshTargets.add(t);
+                  // Stream refresh immediately so UI updates during long check-ins.
+                  sendSSE({ type: "refresh", target: t });
+                }
               }
 
               if (result.shouldStop) {
@@ -262,9 +343,35 @@ export function runAtlas(input: AtlasInput): ReadableStream<Uint8Array> {
           });
         }
 
-        Array.from(refreshTargets).forEach((target) => {
-          sendSSE({ type: "refresh", target });
-        });
+        const attemptedPlanSave = attemptedMealPlanSave || attemptedWorkoutPlanSave;
+        if (input.mode === "checkin" && attemptedPlanSave && !mealPlanSavedForCurrentWeek) {
+          sendSSE({
+            type: "text",
+            content:
+              "\n\n— Check-in did not save a meal plan for the current week, so dashboards cannot update. Please say **retry check-in** and I will regenerate and save this week's meal plan now. —",
+          });
+          sendSSE({
+            type: "error",
+            content:
+              "CHECKIN_MEALPLAN_NOT_PERSISTED_CURRENT_WEEK",
+          });
+        }
+        if (
+          input.mode === "checkin" &&
+          attemptedPlanSave &&
+          !workoutOptional &&
+          !workoutPlanSavedForCurrentWeek
+        ) {
+          sendSSE({
+            type: "text",
+            content:
+              "\n\n— Check-in did not save a workout plan for the current week. Please say **retry check-in** and I will regenerate and save this week's workout plan too. —",
+          });
+          sendSSE({
+            type: "error",
+            content: "CHECKIN_WORKOUT_NOT_PERSISTED_CURRENT_WEEK",
+          });
+        }
 
         sendSSE({
           type: "done",

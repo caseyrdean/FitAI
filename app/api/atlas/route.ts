@@ -52,6 +52,13 @@ export async function POST(request: NextRequest) {
         where: { id: conversationId },
         include: { messages: { orderBy: { createdAt: "asc" } } },
       });
+      if (conversation && conversation.type !== mode) {
+        conversation = await prisma.atlasConversation.update({
+          where: { id: conversation.id },
+          data: { type: mode },
+          include: { messages: { orderBy: { createdAt: "asc" } } },
+        });
+      }
     }
 
     if (!conversation) {
@@ -114,6 +121,7 @@ async function saveResponseInBackground(
   const decoder = new TextDecoder();
   let fullContent = "";
   let toolCalls: unknown = null;
+  let buffer = "";
 
   try {
     while (true) {
@@ -121,7 +129,9 @@ async function saveResponseInBackground(
       if (done) break;
 
       const chunk = decoder.decode(value, { stream: true });
-      const lines = chunk.split("\n");
+      buffer += chunk;
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
 
       for (const line of lines) {
         if (!line.startsWith("data: ")) continue;
@@ -137,6 +147,21 @@ async function saveResponseInBackground(
         } catch {
           // ignore parse errors
         }
+      }
+    }
+
+    if (buffer.startsWith("data: ")) {
+      try {
+        const event = JSON.parse(buffer.slice(6));
+        if (event.type === "text" && typeof event.content === "string") {
+          fullContent += event.content;
+        }
+        if (event.type === "done") {
+          fullContent = event.content || fullContent;
+          toolCalls = event.toolCalls || null;
+        }
+      } catch {
+        // ignore parse errors
       }
     }
 

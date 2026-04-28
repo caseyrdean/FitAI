@@ -18,6 +18,7 @@ model User {
   workoutSessions WorkoutSession[]
   progressEntries ProgressEntry[]
   conversations  AtlasConversation[]
+  supplementAdvice SupplementAdvice?
 }
 
 model HealthProfile {
@@ -55,10 +56,23 @@ model FoodLogEntry {
   loggedAt    DateTime @default(now())
   description String
   mealType    String
+  /** "food" | "supplement" — supplements roll into micronutrient totals; macros usually zero. */
+  entryKind   String   @default("food")
   nutrients   Json
   createdAt   DateTime @default(now())
 
   @@index([userId, loggedAt])
+}
+
+/** Atlas-generated supplement recommendations (diet gaps + blood work); generic forms only, no brands. */
+model SupplementAdvice {
+  id        String    @id @default(cuid())
+  userId    String    @unique
+  user      User      @relation(fields: [userId], references: [id])
+  weekStart DateTime?
+  items     Json
+  summary   String    @default("")
+  updatedAt DateTime  @updatedAt
 }
 
 model BloodWorkRecord {

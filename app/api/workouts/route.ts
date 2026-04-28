@@ -24,15 +24,33 @@ export async function POST(request: NextRequest) {
       notes?: string;
     };
 
-    const session = await prisma.workoutSession.create({
-      data: {
+    const dayDate = new Date(date);
+    const existing = await prisma.workoutSession.findFirst({
+      where: {
         userId: USER_ID,
-        date: new Date(date),
+        date: dayDate,
         planDayRef,
-        completed,
-        notes,
       },
+      orderBy: { createdAt: "desc" },
     });
+
+    const session = existing
+      ? await prisma.workoutSession.update({
+          where: { id: existing.id },
+          data: {
+            completed,
+            ...(notes !== undefined ? { notes } : {}),
+          },
+        })
+      : await prisma.workoutSession.create({
+          data: {
+            userId: USER_ID,
+            date: dayDate,
+            planDayRef,
+            completed,
+            notes,
+          },
+        });
 
     return NextResponse.json(session);
   } catch (error) {

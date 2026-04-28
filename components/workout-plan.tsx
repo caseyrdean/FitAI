@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { formatLocalWeekRangeLabel, localPlanDayNoonIso } from "@/lib/local-week";
+import { dispatchFitaiRefresh } from "@/lib/fitai-refresh";
 import { Check, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -97,11 +98,22 @@ function dateForPlanDay(weekStartIso: string, dayIndex: number): string {
   return localPlanDayNoonIso(weekStartIso, dayIndex);
 }
 
+function weekdayForPlanDay(weekStartIso: string, dayIndex: number): string {
+  const d = new Date(dateForPlanDay(weekStartIso, dayIndex));
+  return d.toLocaleDateString(undefined, { weekday: "long" });
+}
+
 function isDayCompleted(
   sessions: WorkoutSession[],
   ref: string
 ): boolean {
-  return sessions.some((s) => s.planDayRef === ref && s.completed);
+  const latest = sessions
+    .filter((s) => s.planDayRef === ref)
+    .sort(
+      (a, b) =>
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+    )[0];
+  return latest?.completed ?? false;
 }
 
 export function WorkoutPlan({
@@ -123,7 +135,7 @@ export function WorkoutPlan({
   const progressPercent =
     totalDays > 0 ? Math.round((completedCount / totalDays) * 100) : 0;
 
-  const logSession = async (dayIndex: number) => {
+  const setSessionCompletion = async (dayIndex: number, completed: boolean) => {
     const d = days[dayIndex];
     const ref = dayRef(d, dayIndex);
     setLogError(null);
@@ -135,16 +147,17 @@ export function WorkoutPlan({
         body: JSON.stringify({
           date: dateForPlanDay(plan.weekStart, dayIndex),
           planDayRef: ref,
-          completed: true,
+          completed,
         }),
       });
       if (!res.ok) {
         const err = (await res.json()) as { error?: string };
         throw new Error(err.error ?? `Request failed (${res.status})`);
       }
+      dispatchFitaiRefresh({ source: "workouts", scopes: ["workouts", "dashboard"] });
       onSessionLogged?.();
     } catch (e) {
-      setLogError(e instanceof Error ? e.message : "Failed to log session");
+      setLogError(e instanceof Error ? e.message : "Failed to update session");
     } finally {
       setLoggingRef(null);
     }
@@ -215,16 +228,25 @@ export function WorkoutPlan({
             >
               <CardHeader className="pb-2">
                 <div className="flex items-start justify-between gap-2">
-                  <CardTitle className="text-lg text-white">
-                    {dayTitle(day, index)}
-                  </CardTitle>
+                  <div>
+                    <p className="text-xs font-medium uppercase tracking-wide text-[#00aaff]">
+                      {weekdayForPlanDay(plan.weekStart, index)}
+                    </p>
+                    <CardTitle className="text-lg text-white">
+                      {dayTitle(day, index)}
+                    </CardTitle>
+                  </div>
                   {done && (
-                    <span
-                      className="flex h-8 w-8 items-center justify-center rounded-full bg-[#00ff88]/15 text-[#00ff88]"
-                      aria-label="Completed"
+                    <button
+                      type="button"
+                      className="flex h-8 w-8 items-center justify-center rounded-full bg-[#00ff88]/15 text-[#00ff88] hover:bg-[#00ff88]/25"
+                      aria-label="Mark incomplete"
+                      title="Mark incomplete"
+                      disabled={loggingRef === ref}
+                      onClick={() => void setSessionCompletion(index, false)}
                     >
                       <Check className="h-4 w-4" />
-                    </span>
+                    </button>
                   )}
                 </div>
                 {day.focus && (
@@ -281,16 +303,16 @@ export function WorkoutPlan({
                 </ul>
                 <Button
                   className="w-full bg-[#00ff88] text-black hover:bg-[#00ff88]/90"
-                  disabled={done || loggingRef === ref}
-                  onClick={() => void logSession(index)}
+                  disabled={loggingRef === ref}
+                  onClick={() => void setSessionCompletion(index, !done)}
                 >
                   {loggingRef === ref ? (
                     <>
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Logging…
+                      Updating…
                     </>
                   ) : done ? (
-                    "Completed"
+                    "Mark incomplete"
                   ) : (
                     "Log session"
                   )}

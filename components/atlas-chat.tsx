@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
+import type { FitaiRefreshScope } from "@/lib/fitai-refresh";
 import { dispatchFitaiRefresh } from "@/lib/fitai-refresh";
 import { MessageCircle, X, Send, Loader2 } from "lucide-react";
 
@@ -18,6 +19,22 @@ type ChatMode = "onboarding" | "checkin" | "chat";
 export { FITAI_REFRESH_EVENT } from "@/lib/fitai-refresh";
 
 export function AtlasChat() {
+  const normalizeTargetScope = (value: unknown): FitaiRefreshScope | null => {
+    if (typeof value !== "string") return null;
+    const valid = new Set<FitaiRefreshScope>([
+      "meals",
+      "foodlog",
+      "progress",
+      "workouts",
+      "bloodwork",
+      "supplements",
+      "profile",
+      "atlas",
+      "dashboard",
+    ]);
+    return valid.has(value as FitaiRefreshScope) ? (value as FitaiRefreshScope) : null;
+  };
+
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -132,7 +149,15 @@ export function AtlasChat() {
                 ];
               });
             } else if (event.type === "refresh") {
-              dispatchFitaiRefresh({ target: event.target });
+              const targetScope = normalizeTargetScope(event.target);
+              // #region agent log
+              fetch('http://127.0.0.1:7702/ingest/8b876957-51d4-454d-9a7e-692ba8eff35d',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'08b46b'},body:JSON.stringify({sessionId:'08b46b',runId:'initial',hypothesisId:'H4',location:'components/atlas-chat.tsx:sendMessage:refresh-event',message:'atlas SSE refresh received',data:{eventTarget:event.target,normalizedTarget:targetScope},timestamp:Date.now()})}).catch(()=>{});
+              // #endregion
+              dispatchFitaiRefresh({
+                source: "atlas",
+                target: targetScope ?? undefined,
+                scopes: targetScope ? [targetScope, "dashboard"] : ["dashboard"],
+              });
             } else if (event.type === "done") {
               if (needsOnboarding && mode === "onboarding") {
                 setNeedsOnboarding(false);

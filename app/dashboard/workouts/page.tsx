@@ -30,7 +30,7 @@ export default function WorkoutsPage() {
     setError(null);
     setLoading(true);
     try {
-      const res = await fetch("/api/workouts");
+      const res = await fetch("/api/workouts", { cache: "no-store" });
       if (!res.ok) {
         throw new Error(`Failed to load (${res.status})`);
       }
@@ -48,7 +48,12 @@ export default function WorkoutsPage() {
     void loadWorkouts();
   }, [loadWorkouts]);
 
-  useAtlasRefresh(loadWorkouts);
+  useAtlasRefresh(
+    () => {
+      void loadWorkouts();
+    },
+    { scopes: ["workouts"] },
+  );
 
   const planDayCount = useMemo(() => {
     if (!plan?.days || !Array.isArray(plan.days)) return 0;

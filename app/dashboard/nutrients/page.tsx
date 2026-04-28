@@ -41,10 +41,10 @@ import {
 } from "@/lib/nutrients/micronutrients";
 import {
   FOOD_LOG_SYNC_DAYS,
+  currentLocalWeekDateKeys,
   formatLocalWeekRangeLabel,
   parseWeekStartToLocalSunday,
   startOfLocalWeekSunday,
-  trackingWeekDateKeysForMealPlan,
 } from "@/lib/local-week";
 
 type FoodLogEntry = {
@@ -146,14 +146,18 @@ function MicronutrientTable({
 
 export default function NutrientsPage() {
   const [entries, setEntries] = useState<FoodLogEntry[] | null>(null);
-  const [mealPlanWeekStart, setMealPlanWeekStart] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshTick, setRefreshTick] = useState(0);
   /** Must be computed in the browser so "today" matches the user's timezone (SSR used server TZ). */
   const [todayKey, setTodayKey] = useState("");
 
   const triggerRefresh = useCallback(() => setRefreshTick((n) => n + 1), []);
-  useAtlasRefresh(triggerRefresh);
+  useAtlasRefresh(
+    () => {
+      triggerRefresh();
+    },
+    { scopes: ["foodlog", "meals", "supplements", "dashboard"] },
+  );
 
   useLayoutEffect(() => {
     setTodayKey(todayLocalDateKey());
@@ -163,10 +167,9 @@ export default function NutrientsPage() {
     let cancelled = false;
     (async () => {
       try {
-        const [logRes, mealsRes] = await Promise.all([
-          fetch(`/api/foodlog?days=${FOOD_LOG_SYNC_DAYS}`, { cache: "no-store" }),
-          fetch("/api/meals", { cache: "no-store" }),
-        ]);
+        const logRes = await fetch(`/api/foodlog?days=${FOOD_LOG_SYNC_DAYS}`, {
+          cache: "no-store",
+        });
         if (!logRes.ok) throw new Error(await logRes.text());
         const raw = (await logRes.json()) as unknown;
         const list = Array.isArray(raw) ? raw : [];
@@ -187,14 +190,8 @@ export default function NutrientsPage() {
               nutrients: row.nutrients ?? {},
             };
           });
-        let weekStart: string | null = null;
-        if (mealsRes.ok) {
-          const mp = (await mealsRes.json()) as { weekStart?: string } | null;
-          weekStart = mp && typeof mp.weekStart === "string" ? mp.weekStart : null;
-        }
         if (!cancelled) {
           setEntries(normalized);
-          setMealPlanWeekStart(weekStart);
         }
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load food log");
@@ -211,9 +208,10 @@ export default function NutrientsPage() {
   /** Invalidates week-boundary memos when the local calendar day changes (see meals page). */
   const weekRollKey = todayLocalDateKey();
 
+  /** Local Sun–Sat week containing today — same boundary as Meals; avoids dropping logs when meal-plan week differs. */
   const weekKeys = useMemo(
-    () => trackingWeekDateKeysForMealPlan(mealPlanWeekStart, new Date()),
-    [mealPlanWeekStart, weekRollKey],
+    () => currentLocalWeekDateKeys(new Date()),
+    [weekRollKey],
   );
 
   const weekEntries = useMemo(() => {
@@ -319,10 +317,12 @@ export default function NutrientsPage() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight text-white">Micronutrients</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Tables and macros use your <span className="text-white/90">current local week</span>{" "}
-          (Sun–Sat), matching the dashboard and meals views. Data comes only from your{" "}
-          <span className="text-white/90">food log</span> (typed entries and meal-plan quick add both
-          estimate nutrients from the same description text). All amounts are{" "}
+          Tables and macros use your <span className="text-white/90">local calendar week</span>{" "}
+          (Sun–Sat, the week that contains today), matching the Meals page. Data comes from your{" "}
+          <span className="text-white/90">food log</span> (meals, meal-plan quick-add nutrients, and
+          logged supplements). Supplements get macro and micronutrient estimates for the dose (with
+          optional label overrides for macros on the Meals page). Typed meals are estimated from
+          description. All amounts are{" "}
           <Badge variant="outline" className="border-neon-amber/40 text-neon-amber">
             ~est.
           </Badge>{" "}
@@ -336,8 +336,9 @@ export default function NutrientsPage() {
           <CardHeader className="pb-2">
             <CardTitle className="text-base text-white">This week — from your food log (macros)</CardTitle>
             <CardDescription className="text-xs">
-              Sum of calories, protein, carbs, fat, and fiber for Sun–Sat ({weekRangeLabel}). The
-              micro tables need vitamin/mineral data on those rows (from the estimate pipeline).
+              Sum of calories, protein, carbs, fat, and fiber for Sun–Sat ({weekRangeLabel}) — includes
+              supplement rows when they carry macro values. The micro tables sum vitamins/minerals from
+              every log row (meals and supplements).
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -519,8 +520,8 @@ export default function NutrientsPage() {
           </div>
           {trendData.every((d) => d.vitaminsPct === 0 && d.mineralsPct === 0) && (
             <p className="mt-3 text-center text-sm text-muted-foreground">
-              No micronutrient data for this week yet. Log meals (typed or quick-add); each entry gets
-              vitamins and minerals estimated from its description, same as manual logging.
+              No micronutrient data for this week yet. Log meals (typed or quick-add) or supplements
+              from the Meals page so vitamins and minerals accumulate.
             </p>
           )}
         </CardContent>

@@ -5,7 +5,7 @@ import { MealPlan, type MealPlanApi } from "@/components/meal-plan";
 import { FoodLog, type FoodLogEntryApi, type FoodLogNutrients } from "@/components/food-log";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAtlasRefresh } from "@/hooks/use-atlas-refresh";
-import { FOOD_LOG_SYNC_DAYS, trackingWeekDateKeysForMealPlan } from "@/lib/local-week";
+import { currentLocalWeekDateKeys, FOOD_LOG_SYNC_DAYS } from "@/lib/local-week";
 import { localDateKeyFromLoggedAt, todayLocalDateKey } from "@/lib/nutrients/micronutrients";
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -25,14 +25,26 @@ function parseNumericRecord(raw: unknown): Record<string, number> | undefined {
   return Object.keys(out).length ? out : undefined;
 }
 
+function numField(v: unknown): number | undefined {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string" && v.trim() !== "") {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : undefined;
+  }
+  return undefined;
+}
+
 function parseNutrients(raw: unknown): FoodLogNutrients {
   if (!isRecord(raw)) return {};
   return {
-    calories: typeof raw.calories === "number" ? raw.calories : undefined,
-    protein_g: typeof raw.protein_g === "number" ? raw.protein_g : undefined,
-    carbs_g: typeof raw.carbs_g === "number" ? raw.carbs_g : undefined,
-    fat_g: typeof raw.fat_g === "number" ? raw.fat_g : undefined,
-    fiber_g: typeof raw.fiber_g === "number" && Number.isFinite(raw.fiber_g) ? raw.fiber_g : undefined,
+    calories: numField(raw.calories),
+    protein_g: numField(raw.protein_g),
+    carbs_g: numField(raw.carbs_g),
+    fat_g: numField(raw.fat_g),
+    fiber_g:
+      typeof raw.fiber_g === "number" && Number.isFinite(raw.fiber_g)
+        ? raw.fiber_g
+        : numField(raw.fiber_g),
     vitamins: parseNumericRecord(raw.vitamins),
     minerals: parseNumericRecord(raw.minerals),
   };
@@ -71,7 +83,12 @@ export default function MealsDashboardPage() {
     setStatsTick((n) => n + 1);
   }, []);
 
-  useAtlasRefresh(refreshStats);
+  useAtlasRefresh(
+    () => {
+      refreshStats();
+    },
+    { scopes: ["meals", "foodlog", "supplements", "dashboard"] },
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -107,7 +124,7 @@ export default function MealsDashboardPage() {
   const weekRollKey = todayLocalDateKey();
 
   const weekTotals = useMemo(() => {
-    const keys = trackingWeekDateKeysForMealPlan(plan?.weekStart ?? null, new Date());
+    const keys = currentLocalWeekDateKeys(new Date());
     const weekKeySet = new Set(keys);
     let calories = 0;
     let protein_g = 0;
@@ -122,7 +139,7 @@ export default function MealsDashboardPage() {
       if (n.fat_g != null) fat_g += n.fat_g;
     }
     return { calories, protein_g, carbs_g, fat_g };
-  }, [entries, plan?.weekStart, weekRollKey]);
+  }, [entries, weekRollKey]);
 
   const weekTargets = useMemo(
     () => ({
@@ -179,7 +196,9 @@ export default function MealsDashboardPage() {
           Meals & <span className="text-neon-green">nutrition</span>
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          This week&apos;s intake (Sun–Sat) vs 7× your plan&apos;s daily macro targets. All values{" "}
+          This week&apos;s intake (Sun–Sat) from your food log — meals{" "}
+          <span className="text-white/80">and</span> supplements — vs 7× your plan&apos;s daily macro
+          targets. Micronutrients on the Nutrients tab include the same log. All values{" "}
           <span className="text-neon-green">~est.</span>
         </p>
       </div>
@@ -221,7 +240,7 @@ export default function MealsDashboardPage() {
                       />
                     </div>
                     <p className="mt-2 text-[10px] uppercase tracking-wide text-muted-foreground">
-                      ~est. from logged foods
+                      ~est. from logged foods &amp; supplements
                     </p>
                   </>
                 )}
@@ -231,8 +250,8 @@ export default function MealsDashboardPage() {
         })}
       </div>
 
-      <MealPlan onAfterSwap={refreshStats} />
-      <FoodLog mealPlan={plan} onAfterLog={refreshStats} />
+      <MealPlan onAfterSwap={refreshStats} refreshToken={statsTick} />
+      <FoodLog mealPlan={plan} onAfterLog={refreshStats} refreshToken={statsTick} />
     </div>
   );
 }

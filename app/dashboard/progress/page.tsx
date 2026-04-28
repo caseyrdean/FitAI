@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ProgressChart, type ProgressChartPoint } from "@/components/progress-chart";
 import { useAtlasRefresh } from "@/hooks/use-atlas-refresh";
+import { dispatchFitaiRefresh } from "@/lib/fitai-refresh";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -49,11 +50,21 @@ export default function ProgressPage() {
   const [submitError, setSubmitError] = useState<string | null>(null);
 
   const loadEntries = useCallback(async () => {
-    const res = await fetch("/api/progress");
+    const res = await fetch("/api/progress", { cache: "no-store" });
     if (!res.ok) throw new Error(await res.text());
     const data = (await res.json()) as ProgressApiEntry[];
     return Array.isArray(data) ? data : [];
   }, []);
+
+  const refreshProgress = useCallback(async () => {
+    try {
+      const data = await loadEntries();
+      setEntries(data);
+      setLoadError(null);
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : "Failed to load progress");
+    }
+  }, [loadEntries]);
 
   useEffect(() => {
     let cancelled = false;
@@ -73,7 +84,12 @@ export default function ProgressPage() {
     };
   }, [loadEntries]);
 
-  useAtlasRefresh(loadEntries);
+  useAtlasRefresh(
+    () => {
+      void refreshProgress();
+    },
+    { scopes: ["progress"] },
+  );
 
   const chartData = useMemo(() => {
     if (!entries) return [];
@@ -138,6 +154,7 @@ export default function ProgressPage() {
       setWeight("");
       setEnergyLevel("7");
       setNotes("");
+      dispatchFitaiRefresh({ source: "progress", scopes: ["progress", "dashboard"] });
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : "Failed to save");
     } finally {

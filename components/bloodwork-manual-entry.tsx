@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/table";
 import { Plus, Trash2 } from "lucide-react";
 import type { BloodWorkRecord } from "@/components/bloodwork-upload";
+import { dispatchFitaiRefresh } from "@/lib/fitai-refresh";
 
 type DraftRow = {
   id: string;
@@ -170,6 +171,7 @@ export function BloodworkManualEntry({ onSaved }: BloodworkManualEntryProps) {
         );
         return;
       }
+      dispatchFitaiRefresh({ source: "bloodwork", scopes: ["bloodwork", "dashboard"] });
       onSaved?.(data as BloodWorkRecord);
       setRows([newRow(), newRow(), newRow(), newRow(), newRow()]);
     } catch {

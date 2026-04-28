@@ -7,7 +7,12 @@ import {
   formatBloodWorkForNutrientEstimate,
   getPreferredBloodWorkRecord,
 } from "@/lib/bloodwork/context-for-ai";
+import { mergeSupplementNutrientsAfterAiReestimate } from "@/lib/supplements/merge-for-log";
 import Anthropic from "@anthropic-ai/sdk";
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -19,6 +24,7 @@ export async function PATCH(request: NextRequest, { params }: RouteContext) {
     description?: string;
     mealType?: string;
     loggedAt?: string;
+    entryKind?: string;
     // When provided, use these directly — no re-estimation
     calories?: number | null;
     protein_g?: number | null;
@@ -36,6 +42,12 @@ export async function PATCH(request: NextRequest, { params }: RouteContext) {
   const newDescription = body.description?.trim() ?? existing.description;
   const newMealType = body.mealType ?? existing.mealType;
   const newLoggedAt = body.loggedAt ? new Date(body.loggedAt) : existing.loggedAt;
+  const newEntryKind =
+    body.entryKind === "supplement"
+      ? "supplement"
+      : body.entryKind === "food"
+        ? "food"
+        : existing.entryKind;
 
   const manualMacros =
     body.calories != null ||
@@ -56,6 +68,53 @@ export async function PATCH(request: NextRequest, { params }: RouteContext) {
     if (body.protein_g != null) nutrients.protein_g = body.protein_g;
     if (body.carbs_g != null) nutrients.carbs_g = body.carbs_g;
     if (body.fat_g != null) nutrients.fat_g = body.fat_g;
+  } else if (
+    newEntryKind === "supplement" &&
+    body.description &&
+    body.description.trim() !== existing.description
+  ) {
+    try {
+      const bloodRec = await getPreferredBloodWorkRecord(USER_ID);
+      const bloodBlock = formatBloodWorkForNutrientEstimate(bloodRec);
+      const bloodPrefix = bloodBlock
+        ? `\n\n---\n${bloodBlock}\n---\n\n`
+        : "";
+
+      const response = await anthropic.messages.create({
+        model: "claude-haiku-4-5",
+        max_tokens: 1024,
+        messages: [
+          {
+            role: "user",
+            content: `Dietary supplement — estimate for ONE serving/dose. Include meaningful calories/macros for oil softgels, protein powder, gummies, etc.; near-zero only for tiny pure vitamin pills.
+
+"${newDescription}"${bloodPrefix}
+
+Return ONLY a JSON object with these fields:
+{
+  "calories": number,
+  "protein_g": number,
+  "carbs_g": number,
+  "fat_g": number,
+  "fiber_g": number,
+  "vitamins": { "A_mcg": number, "C_mg": number, "D_mcg": number, "E_mg": number, "K_mcg": number, "B1_mg": number, "B2_mg": number, "B3_mg": number, "B5_mg": number, "B6_mg": number, "B12_mcg": number, "biotin_mcg": number, "folate_mcg": number },
+  "minerals": { "calcium_mg": number, "iron_mg": number, "magnesium_mg": number, "zinc_mg": number, "potassium_mg": number, "sodium_mg": number, "selenium_mcg": number, "phosphorus_mg": number, "creatine_g": number }
+}
+
+All values are approximate estimates.`,
+          },
+        ],
+      });
+      const textBlock = response.content.find((b) => b.type === "text");
+      if (textBlock?.type === "text") {
+        const parsed = extractNutrientJsonFromModelText(textBlock.text);
+        if (parsed && isPlainObject(parsed)) {
+          nutrients = mergeSupplementNutrientsAfterAiReestimate(existingNutrients, parsed);
+        }
+      }
+    } catch {
+      // keep existing nutrients on failure
+    }
   } else if (body.description && body.description.trim() !== existing.description) {
     // Description changed and no manual macros — re-estimate
     try {
@@ -81,7 +140,7 @@ Return ONLY a JSON object with these fields:
   "fat_g": number,
   "fiber_g": number,
   "vitamins": { "A_mcg": number, "C_mg": number, "D_mcg": number, "E_mg": number, "K_mcg": number, "B1_mg": number, "B2_mg": number, "B3_mg": number, "B5_mg": number, "B6_mg": number, "B12_mcg": number, "biotin_mcg": number, "folate_mcg": number },
-  "minerals": { "calcium_mg": number, "iron_mg": number, "magnesium_mg": number, "zinc_mg": number, "potassium_mg": number, "sodium_mg": number, "selenium_mcg": number, "phosphorus_mg": number }
+  "minerals": { "calcium_mg": number, "iron_mg": number, "magnesium_mg": number, "zinc_mg": number, "potassium_mg": number, "sodium_mg": number, "selenium_mcg": number, "phosphorus_mg": number, "creatine_g": number }
 }
 
 All values are approximate estimates.`,
@@ -104,6 +163,7 @@ All values are approximate estimates.`,
       description: newDescription,
       mealType: newMealType,
       loggedAt: newLoggedAt,
+      entryKind: newEntryKind,
       nutrients: nutrients as Prisma.InputJsonValue,
     },
   });

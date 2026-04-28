@@ -74,7 +74,7 @@ export default function BloodworkPage() {
     setFetchError(null);
     setLoading(true);
     try {
-      const res = await fetch("/api/bloodwork");
+      const res = await fetch("/api/bloodwork", { cache: "no-store" });
       if (!res.ok) {
         throw new Error(`Failed to load (${res.status})`);
       }
@@ -91,7 +91,12 @@ export default function BloodworkPage() {
     void loadRecords();
   }, [loadRecords]);
 
-  useAtlasRefresh(loadRecords);
+  useAtlasRefresh(
+    () => {
+      void loadRecords();
+    },
+    { scopes: ["bloodwork"] },
+  );
 
   const uploadsChronological = useMemo(() => {
     return [...records].sort(

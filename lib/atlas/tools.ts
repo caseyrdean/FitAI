@@ -3,19 +3,49 @@ import { getPreferredBloodWorkRecord } from "@/lib/bloodwork/context-for-ai";
 import { PARSE_BLOOD_WORK_TOOL_SCHEMA_DETAILS } from "@/lib/bloodwork/lab-table-schema";
 import { persistMarkersForRecord } from "@/lib/bloodwork/persist-markers";
 import { formatLocalWeekRangeLabel, parseWeekStartToLocalSunday } from "@/lib/local-week";
+import {
+  buildCanonicalShoppingListFromMealPlanMeals,
+  normalizeMealPlanMeals,
+  shoppingCategoryLabels,
+} from "@/lib/shopping/normalize";
+import { sanitizeSupplementAdviceItems } from "@/lib/supplements/sanitize-advice";
 import type Anthropic from "@anthropic-ai/sdk";
 
 export interface ToolResult {
   content: string;
   isError?: boolean;
   shouldStop?: boolean;
-  refreshTarget?: "meals" | "workouts" | "bloodwork" | "progress";
+  refreshTarget?:
+    | "meals"
+    | "workouts"
+    | "bloodwork"
+    | "progress"
+    | "supplements"
+    | "profile"
+    | "dashboard";
+  /** When set, all listed targets are refreshed (overrides `refreshTarget`). */
+  refreshTargets?: (
+    | "meals"
+    | "workouts"
+    | "bloodwork"
+    | "progress"
+    | "supplements"
+    | "profile"
+    | "dashboard"
+  )[];
 }
 
 export type AtlasTool = {
   definition: Anthropic.Tool;
   execute: (input: Record<string, unknown>, userId: string) => Promise<ToolResult>;
 };
+
+function localDateKey(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
 
 const estimateNutrition: AtlasTool = {
   definition: {
@@ -69,6 +99,8 @@ const generateMealPlan: AtlasTool = {
       "and each day must contain meal type keys (Breakfast, Lunch, Dinner, Snack) with object values — NOT plain strings. " +
       "Every meal's ingredients array must include quantities and units (e.g. '1/2 cup rolled oats', '150g chicken breast', '1 tbsp olive oil'). Never list an ingredient without a measurement. " +
       "Ingredient text must use the BASE food name only: '1 cup carrots' not 'roasted carrots', '1/2 cup peaches' not 'peaches in juice', '2 tbsp olive oil' not 'extra virgin olive oil'. Omit cooking method and packing medium from the ingredient line. " +
+      "DUPLICATE-AUDIT RULE: Before finalizing output, scan the full week's ingredients and shopping list, merge near-duplicates caused by wording/style differences, and normalize each line to canonical base names + stable units. Always deduplicate to the best of your ability. " +
+      "SUPPLEMENTS: After planning meals, include **supplementRecommendations** (and **supplementSummary**) whenever diet gaps or labs warrant supplementation. **Weight flagged blood work heavily** (e.g. low vitamin D, iron, B12, ferritin trends). **Dosing for the Supplements tab:** **amount** = quantity for **one intake** (one capsule, one scoop) — **never** a weekly or multi-day total; **frequency** states how often (daily, twice daily, 3×/week). This avoids users misreading a dose as daily when it was weekly (overdose risk). Each row must include **frequency** when possible. Use **generic forms and doses only** — never retail brand names. " +
       "weekStart: YYYY-MM-DD for any day in the target week (Sunday–Saturday). It is normalized to that week's Sunday in the user's local calendar. Use the correct year (e.g. 2026-03-29 for the week containing March 29).",
     input_schema: {
       type: "object" as const,
@@ -89,6 +121,7 @@ const generateMealPlan: AtlasTool = {
             'ingredients (array — each string MUST include quantity+unit; use base ingredient names only e.g. "6 oz salmon", "1 cup carrot", "1/2 cup peach", "1 tbsp olive oil" — no "roasted", "in juice", "extra virgin" in the ingredient text), ' +
             'prepTime (string). ' +
             'Every meal MUST include fiber_g, vitamins, and minerals so each planned meal is nutritionally complete in the plan. ' +
+            'Before returning, run a duplicate audit over all ingredient strings and normalize near-duplicate wording to canonical grocery names. ' +
             'Example: {"Sunday":{"Breakfast":{"name":"Oatmeal","calories":380,"protein_g":14,"carbs_g":65,"fat_g":8,"fiber_g":6,"vitamins":{"A_mcg":0,"C_mg":8,"D_mcg":0,"E_mg":2,"K_mcg":2,"B1_mg":0.3,"B2_mg":0.2,"B3_mg":2,"B5_mg":0.5,"B6_mg":0.1,"B12_mcg":0,"biotin_mcg":8,"folate_mcg":35},"minerals":{"calcium_mg":180,"iron_mg":2,"magnesium_mg":80,"zinc_mg":1.5,"potassium_mg":350,"sodium_mg":120,"selenium_mcg":12,"phosphorus_mg":180},"ingredients":["1/2 cup rolled oats","1 cup blueberries","1 tbsp honey"],"prepTime":"5 min"}}}',
         },
         shoppingList: {
@@ -96,11 +129,12 @@ const generateMealPlan: AtlasTool = {
           items: {
             type: "object",
             properties: {
-              category: { type: "string" },
+              category: { type: "string", enum: shoppingCategoryLabels() },
               items: { type: "array", items: { type: "string" } },
             },
           },
-          description: "Shopping list organized by category (Produce, Protein, Dairy, etc.)",
+          description:
+            "Shopping list organized by canonical categories only: Protein, Dairy & Alternatives, Grains & Bread, Vegetables, Fruit, Nuts, Seeds & Oils, Condiments & Spices, Other. Items must be deduplicated and normalized.",
         },
         macroTargets: {
           type: "object",
@@ -123,6 +157,54 @@ const generateMealPlan: AtlasTool = {
             },
           },
           description: "Meal prep instructions with time estimates",
+        },
+        supplementRecommendations: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              supplementKind: {
+                type: "string",
+                description:
+                  "Generic form only, e.g. Cholecalciferol (vitamin D3), ferrous bisglycinate — never a retail brand",
+              },
+              amount: {
+                type: "number",
+                description:
+                  "Dose for **one intake** (one pill/scoop/serving). NOT a weekly total, NOT 7× daily — use frequency for cadence.",
+              },
+              unit: {
+                type: "string",
+                description: "IU, mg, mcg, or g — applies to the single **amount** above (one intake)",
+              },
+              frequency: {
+                type: "string",
+                description:
+                  "How often that **amount** is taken: e.g. once daily, twice daily, 3× per week. Required for safe interpretation (daily vs weekly regimens).",
+              },
+              timing: {
+                type: "string",
+                description: "Optional, e.g. with largest meal, morning, split doses",
+              },
+              rationale: {
+                type: "string",
+                description: "Why — reference diet gaps and/or specific lab markers (~est.)",
+              },
+              drivers: {
+                type: "array",
+                items: { type: "string" },
+                description: "Optional tags: diet_gap, bloodwork, both",
+              },
+            },
+            required: ["supplementKind", "amount", "unit", "rationale"],
+          },
+          description:
+            "Recommended supplements to close gaps the meal plan does not fully cover. **Prioritize flagged blood panels.** **amount** = per single intake; **frequency** = how often — never weekly aggregate in amount. Generic types only — no brand names.",
+        },
+        supplementSummary: {
+          type: "string",
+          description:
+            "Short paragraph: how these fit the plan and labs. Remind that listed **amount**s are **per intake** with **frequency** (not weekly totals) (~est., not medical prescription).",
         },
         notes: {
           type: "string",
@@ -160,8 +242,14 @@ const generateMealPlan: AtlasTool = {
       }
     }
 
+    const canonicalMeals = normalizeMealPlanMeals(mealsObj);
+    const canonicalShoppingList =
+      buildCanonicalShoppingListFromMealPlanMeals(canonicalMeals);
     const now = new Date();
     let weekStartDate = parseWeekStartToLocalSunday(String(input.weekStart), now);
+    // #region agent log
+    fetch('http://127.0.0.1:7702/ingest/8b876957-51d4-454d-9a7e-692ba8eff35d',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'08b46b'},body:JSON.stringify({sessionId:'08b46b',runId:'initial',hypothesisId:'H1',location:'lib/atlas/tools.ts:generateMealPlan:week-normalize',message:'generate_meal_plan normalized weekStart',data:{requestedWeekStart:input.weekStart,normalizedWeekStart:localDateKey(weekStartDate),currentWeekStart:localDateKey(parseWeekStartToLocalSunday(localDateKey(now), now))},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
     if (now.getFullYear() - weekStartDate.getFullYear() > 1) {
       const bumped = new Date(weekStartDate);
       bumped.setFullYear(now.getFullYear());
@@ -187,8 +275,8 @@ const generateMealPlan: AtlasTool = {
         where: { id: existing.id },
         data: {
           weekStart: weekStartDate,
-          meals: input.meals as object,
-          shoppingList: input.shoppingList as object,
+          meals: canonicalMeals as object,
+          shoppingList: canonicalShoppingList as object,
           macroTargets: input.macroTargets as object,
           prepGuide: input.prepGuide as object,
         },
@@ -198,13 +286,16 @@ const generateMealPlan: AtlasTool = {
         data: {
           userId,
           weekStart: weekStartDate,
-          meals: input.meals as object,
-          shoppingList: input.shoppingList as object,
+          meals: canonicalMeals as object,
+          shoppingList: canonicalShoppingList as object,
           macroTargets: input.macroTargets as object,
           prepGuide: input.prepGuide as object,
         },
       });
     }
+    // #region agent log
+    fetch('http://127.0.0.1:7702/ingest/8b876957-51d4-454d-9a7e-692ba8eff35d',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'08b46b'},body:JSON.stringify({sessionId:'08b46b',runId:'initial',hypothesisId:'H2',location:'lib/atlas/tools.ts:generateMealPlan:saved',message:'generate_meal_plan persisted plan',data:{planId:plan.id,savedWeekStart:localDateKey(weekStartDate),usedExisting:!!existing,userId},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
 
     const bloodRec = await getPreferredBloodWorkRecord(userId);
     const flaggedLabs = (bloodRec?.markers ?? []).filter((m) => m.flagged);
@@ -216,18 +307,146 @@ const generateMealPlan: AtlasTool = {
             .join("; ")}). Confirm in your reply that the saved plan aligns with those markers (fiber, fat quality, sodium, carbs, etc.).`
         : undefined;
 
+    let supplementRefreshed = false;
+    if (input.supplementRecommendations !== undefined) {
+      const { items, valid } = sanitizeSupplementAdviceItems(
+        input.supplementRecommendations,
+      );
+      if (valid) {
+        const summary =
+          typeof input.supplementSummary === "string"
+            ? input.supplementSummary.slice(0, 4000)
+            : "";
+        await prisma.supplementAdvice.upsert({
+          where: { userId },
+          create: {
+            userId,
+            weekStart: weekStartDate,
+            items,
+            summary,
+          },
+          update: {
+            weekStart: weekStartDate,
+            items,
+            summary,
+          },
+        });
+        supplementRefreshed = true;
+      }
+    }
+
     return {
       content: JSON.stringify({
         success: true,
         planId: plan.id,
         message: `Meal plan saved for ${formatLocalWeekRangeLabel(weekStartDate)}`,
+        normalizedWeekStartLocal: localDateKey(weekStartDate),
         ...(bloodWorkEcho && { bloodWorkEcho }),
         ...(autoFixed.length > 0 && {
-          warning: `${autoFixed.length} ingredient(s) were missing measurements and defaulted to "1 serving". Please use specific quantities (e.g. "150g", "1/2 cup") in future plans.`,
+          warning: `${autoFixed.length} ingredient(s) were missing measurements and defaulted to "1 serving". Ingredients and shopping list were canonicalized before saving.`,
           autoFixed,
         }),
+        ...(supplementRefreshed && {
+          supplementsNote: "Supplement recommendations were saved to the Supplements tab.",
+        }),
       }),
-      refreshTarget: "meals",
+      refreshTargets: supplementRefreshed
+        ? ["meals", "supplements", "dashboard"]
+        : ["meals", "dashboard"],
+    };
+  },
+};
+
+const saveSupplementPlan: AtlasTool = {
+  definition: {
+    name: "save_supplement_plan",
+    description:
+      "Save the user's supplement recommendation list. Use when nutrition gaps or labs call for supplementation without a full meal-plan regen, or when the user focuses on supplements. " +
+      "**Strongly weight flagged blood markers** from Latest blood panels. Tie recommendations to meal-plan and log gaps. " +
+      "**Generic supplement forms and amounts only** — never retail brand or product names. " +
+      "**amount** must be **per single intake** (one dose); **never** weekly or multi-day totals. Include **frequency** on each item (e.g. once daily, twice daily, 3×/week) so daily exposure is unambiguous and overdose risk is reduced. " +
+      "The user can log supplements on the meal log; those entries roll into micronutrient totals.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        weekStart: {
+          type: "string",
+          description: "Optional YYYY-MM-DD for the plan week (normalized to Sunday); stored for reference",
+        },
+        items: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              supplementKind: { type: "string" },
+              amount: {
+                type: "number",
+                description: "Per **one** intake — not a weekly total",
+              },
+              unit: { type: "string", description: "Unit for that single intake amount" },
+              frequency: {
+                type: "string",
+                description: "e.g. once daily, twice daily, 3× per week — include whenever possible",
+              },
+              timing: { type: "string" },
+              rationale: { type: "string" },
+              drivers: { type: "array", items: { type: "string" } },
+            },
+            required: ["supplementKind", "amount", "unit", "rationale"],
+          },
+          description:
+            "Each row: generic kind, **amount per intake**, unit, rationale; **frequency** for cadence (not weekly totals). Optional timing and drivers.",
+        },
+        summary: {
+          type: "string",
+          description:
+            "Short overview for the Supplements tab; state that amounts are **per intake** with **frequency** (not weekly aggregates)",
+        },
+      },
+      required: ["items"],
+    },
+  },
+  async execute(input, userId) {
+    const { items, valid } = sanitizeSupplementAdviceItems(input.items);
+    if (!valid) {
+      return {
+        content: JSON.stringify({
+          success: false,
+          message:
+            "No valid rows. Each item needs supplementKind, a positive amount, unit, and rationale (generic forms only, no brands).",
+        }),
+        isError: true,
+      };
+    }
+
+    let weekStartDate: Date | null = null;
+    if (input.weekStart) {
+      weekStartDate = parseWeekStartToLocalSunday(String(input.weekStart), new Date());
+    }
+    const summary =
+      typeof input.summary === "string" ? input.summary.slice(0, 4000) : "";
+
+    await prisma.supplementAdvice.upsert({
+      where: { userId },
+      create: {
+        userId,
+        weekStart: weekStartDate,
+        items,
+        summary,
+      },
+      update: {
+        ...(weekStartDate ? { weekStart: weekStartDate } : {}),
+        items,
+        summary,
+      },
+    });
+
+    return {
+      content: JSON.stringify({
+        success: true,
+        message: `Saved ${items.length} supplement recommendation(s).`,
+      }),
+      refreshTargets: ["supplements", "dashboard"],
     };
   },
 };
@@ -319,7 +538,7 @@ const parseBloodWork: AtlasTool = {
         flaggedMarkers: flaggedCount,
         message: `Parsed ${persisted} markers, ${flaggedCount} flagged`,
       }),
-      refreshTarget: "bloodwork",
+      refreshTargets: ["bloodwork", "dashboard"],
     };
   },
 };
@@ -354,6 +573,9 @@ const generateWorkoutPlan: AtlasTool = {
   },
   async execute(input, userId) {
     const weekStart = parseWeekStartToLocalSunday(String(input.weekStart), new Date());
+    // #region agent log
+    fetch('http://127.0.0.1:7702/ingest/8b876957-51d4-454d-9a7e-692ba8eff35d',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'08b46b'},body:JSON.stringify({sessionId:'08b46b',runId:'initial',hypothesisId:'H2',location:'lib/atlas/tools.ts:generateWorkoutPlan:week-normalize',message:'generate_workout_plan normalized weekStart',data:{requestedWeekStart:input.weekStart,normalizedWeekStart:localDateKey(weekStart)},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
     const plan = await prisma.workoutPlan.create({
       data: {
         userId,
@@ -366,8 +588,9 @@ const generateWorkoutPlan: AtlasTool = {
         success: true,
         planId: plan.id,
         message: `Workout plan created for ${formatLocalWeekRangeLabel(weekStart)}`,
+        normalizedWeekStartLocal: localDateKey(weekStart),
       }),
-      refreshTarget: "workouts",
+      refreshTargets: ["workouts", "dashboard"],
     };
   },
 };
@@ -501,6 +724,7 @@ const updateHealthProfile: AtlasTool = {
         message: "Health profile updated",
         updatedFields: Object.keys(data),
       }),
+      refreshTargets: ["profile", "dashboard", "meals", "workouts", "supplements", "progress"],
     };
   },
 };
@@ -542,6 +766,7 @@ const flagUnsafeCondition: AtlasTool = {
 export const ATLAS_TOOLS: AtlasTool[] = [
   estimateNutrition,
   generateMealPlan,
+  saveSupplementPlan,
   parseBloodWork,
   generateWorkoutPlan,
   webSearch,

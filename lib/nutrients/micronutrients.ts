@@ -84,10 +84,17 @@ const VIT_NORM_TO_CANON: Record<string, string> = {
   vitamin_c_mg: "C_mg",
   d_mcg: "D_mcg",
   vitamin_d_mcg: "D_mcg",
+  vitamin_d: "D_mcg",
+  vitamin_d3: "D_mcg",
+  vit_d_mcg: "D_mcg",
+  vd_mcg: "D_mcg",
   e_mg: "E_mg",
   vitamin_e_mg: "E_mg",
-  k_mcg: "K_mcg",
   vitamin_k_mcg: "K_mcg",
+  vitamin_k: "K_mcg",
+  vitamin_k2: "K_mcg",
+  vit_k_mcg: "K_mcg",
+  vk_mcg: "K_mcg",
   b1_mg: "B1_mg",
   thiamine_mg: "B1_mg",
   b2_mg: "B2_mg",
@@ -125,6 +132,9 @@ const MIN_NORM_TO_CANON: Record<string, string> = {
   se_mcg: "selenium_mcg",
   phosphorus_mg: "phosphorus_mg",
   p_mg: "phosphorus_mg",
+  creatine_g: "creatine_g",
+  creatine_monohydrate_g: "creatine_g",
+  creatine_hcl_g: "creatine_g",
 };
 
 const VIT_CANON = new Set(Object.values(VIT_NORM_TO_CANON));
@@ -186,6 +196,26 @@ function addMicronutrientValue(into: MicronutrientTotals, key: string, val: unkn
   const n = num(val);
   const norm = normNutrientKey(key);
 
+  /** Creatine on labels is often mg; roll into grams for one dashboard row. */
+  if (
+    norm === "creatine_mg" ||
+    norm === "creatine_monohydrate_mg" ||
+    norm === "creatine_hcl_mg"
+  ) {
+    into.minerals.creatine_g = (into.minerals.creatine_g ?? 0) + n / 1000;
+    return;
+  }
+
+  /**
+   * Models sometimes emit bare `creatine` / `creatine_monohydrate` (grams). Values ≫ typical
+   * single-serving grams are treated as mg (e.g. 5000 → 5 g).
+   */
+  if (norm === "creatine" || norm === "creatine_monohydrate" || norm === "creatine_hcl") {
+    const grams = n > 250 ? n / 1000 : n;
+    into.minerals.creatine_g = (into.minerals.creatine_g ?? 0) + grams;
+    return;
+  }
+
   const vitCanon = VIT_NORM_TO_CANON[norm];
   if (vitCanon) {
     into.vitamins[vitCanon] = (into.vitamins[vitCanon] ?? 0) + n;
@@ -242,6 +272,15 @@ export const MICRONUTRIENT_DEFS: MicronutrientDef[] = [
   { key: "Na", label: "Sodium", unit: "mg", rda: 2300, group: "mineral", get: (t) => t.minerals.sodium_mg },
   { key: "Se", label: "Selenium", unit: "mcg", rda: 55, group: "mineral", get: (t) => t.minerals.selenium_mcg },
   { key: "P", label: "Phosphorus", unit: "mg", rda: 700, group: "mineral", get: (t) => t.minerals.phosphorus_mg },
+  /** No RDA — 5 g/day reference for % bar (~maintenance dose band, not a recommendation). */
+  {
+    key: "creatine",
+    label: "Creatine",
+    unit: "g",
+    rda: 5,
+    group: "mineral",
+    get: (t) => t.minerals.creatine_g ?? 0,
+  },
   { key: "fiber", label: "Fiber", unit: "g", rda: 28, group: "mineral", get: (t) => t.fiber_g },
 ];
 

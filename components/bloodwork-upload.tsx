@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
+import { dispatchFitaiRefresh } from "@/lib/fitai-refresh";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -102,6 +103,7 @@ export function BloodworkUpload({ onUploadComplete }: BloodworkUploadProps) {
           }
           const record = data as BloodWorkRecord;
           setLatestRecord(record);
+          dispatchFitaiRefresh({ source: "bloodwork", scopes: ["bloodwork", "dashboard"] });
           onUploadComplete?.(record);
         } catch {
           setError("Invalid response from server");

@@ -10,12 +10,14 @@ import {
   TrendingUp,
   Droplets,
   Dumbbell,
+  Pill,
 } from "lucide-react";
 
 const navItems = [
   { href: "/dashboard", label: "Home", icon: Home },
   { href: "/dashboard/meals", label: "Meals", icon: UtensilsCrossed },
   { href: "/dashboard/nutrients", label: "Nutrients", icon: FlaskConical },
+  { href: "/dashboard/supplements", label: "Supplements", icon: Pill },
   { href: "/dashboard/progress", label: "Progress", icon: TrendingUp },
   { href: "/dashboard/bloodwork", label: "Blood Work", icon: Droplets },
   { href: "/dashboard/workouts", label: "Workouts", icon: Dumbbell },

@@ -3,9 +3,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAtlasRefresh } from "@/hooks/use-atlas-refresh";
 import {
+  currentLocalWeekDateKeys,
   FOOD_LOG_SYNC_DAYS,
   planDayIndexFromWeekStart,
-  trackingWeekDateKeysForMealPlan,
 } from "@/lib/local-week";
 import {
   LineChart,
@@ -44,6 +44,7 @@ type FoodLogEntry = {
   loggedAt: string;
   description: string;
   mealType: string;
+  entryKind?: string;
   nutrients: unknown;
   createdAt: string;
 };
@@ -122,6 +123,14 @@ type WorkoutsPayload = {
   sessions: WorkoutSession[];
 };
 
+type CheckInStatusPayload = {
+  status: "required" | "scheduled" | "done_today" | "overdue";
+  label: string;
+  lastCheckInAt: string | null;
+  daysSinceLastCheckIn: number | null;
+  daysUntilDue: number | null;
+};
+
 // --- helpers ---
 
 const NEON_GREEN = "#00ff88";
@@ -192,21 +201,19 @@ function foodLogStreak(entries: FoodLogEntry[]): number {
   return streak;
 }
 
-function nextCheckInLabel(progress: ProgressEntry[]): string {
-  if (progress.length === 0) return "Start onboarding";
-  const latest = [...progress].sort(
-    (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
-  )[0];
-  const last = startOfLocalDay(new Date(latest.date));
-  const next = new Date(last);
-  next.setDate(next.getDate() + 7);
-  const today = startOfLocalDay(new Date());
-  const diffDays = Math.round(
-    (next.getTime() - today.getTime()) / (24 * 60 * 60 * 1000)
+function workoutStreak(sessions: WorkoutSession[]): number {
+  const completedDays = new Set(
+    sessions
+      .filter((s) => s.completed)
+      .map((s) => localDateKey(new Date(s.date))),
   );
-  if (diffDays <= 0) return "Due today";
-  if (diffDays === 1) return "Due in 1 day";
-  return `Due in ${diffDays} days`;
+  let streak = 0;
+  const cursor = startOfLocalDay(new Date());
+  while (completedDays.has(localDateKey(cursor))) {
+    streak += 1;
+    cursor.setDate(cursor.getDate() - 1);
+  }
+  return streak;
 }
 
 type WorkoutDayShape = {
@@ -309,15 +316,38 @@ export default function DashboardPage() {
     sessions: [],
   });
   const [bloodwork, setBloodwork] = useState<BloodWorkRecord[]>([]);
+  const [checkInStatus, setCheckInStatus] = useState<CheckInStatusPayload>({
+    status: "required",
+    label: "Check-in required",
+    lastCheckInAt: null,
+    daysSinceLastCheckIn: null,
+    daysUntilDue: null,
+  });
 
   const triggerRefresh = useCallback(() => setRefreshTick((n) => n + 1), []);
-  useAtlasRefresh(triggerRefresh);
+  useAtlasRefresh(
+    () => {
+      triggerRefresh();
+    },
+    {
+      scopes: [
+        "dashboard",
+        "foodlog",
+        "meals",
+        "progress",
+        "workouts",
+        "bloodwork",
+        "supplements",
+        "profile",
+      ],
+    },
+  );
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       setLoading(true);
-      const [fl, pr, mp, wo, bw] = await Promise.all([
+      const [fl, pr, mp, wo, bw, cis] = await Promise.all([
         fetchJson<FoodLogEntry[]>(
           `/api/foodlog?days=${FOOD_LOG_SYNC_DAYS}`,
           [],
@@ -329,6 +359,13 @@ export default function DashboardPage() {
           sessions: [],
         }),
         fetchJson<BloodWorkRecord[]>("/api/bloodwork", []),
+        fetchJson<CheckInStatusPayload>("/api/atlas/checkin-status", {
+          status: "required",
+          label: "Check-in required",
+          lastCheckInAt: null,
+          daysSinceLastCheckIn: null,
+          daysUntilDue: null,
+        }),
       ]);
       if (!cancelled) {
         setFoodLog(Array.isArray(fl) ? fl : []);
@@ -343,6 +380,7 @@ export default function DashboardPage() {
             : { plan: null, sessions: [] }
         );
         setBloodwork(Array.isArray(bw) ? bw : []);
+        setCheckInStatus(cis);
         setLoading(false);
       }
     })();
@@ -379,7 +417,7 @@ export default function DashboardPage() {
   const streak = useMemo(() => foodLogStreak(foodLog), [foodLog]);
 
   const calorieSeries = useMemo(() => {
-    const keys = trackingWeekDateKeysForMealPlan(mealPlan?.weekStart ?? null, new Date());
+    const keys = currentLocalWeekDateKeys(new Date());
     return keys.map((key) => {
       const d = new Date(`${key}T12:00:00`);
       const calories = foodLog
@@ -390,7 +428,7 @@ export default function DashboardPage() {
         calories,
       };
     });
-  }, [foodLog, mealPlan?.weekStart, weekRollKey]);
+  }, [foodLog, weekRollKey]);
 
   const weightSeries = useMemo(() => {
     const cutoff = startOfLocalDay(new Date());
@@ -445,7 +483,7 @@ export default function DashboardPage() {
     );
   }, [workouts.sessions, workouts.plan, workoutBlock]);
 
-  const checkInText = useMemo(() => nextCheckInLabel(progress), [progress]);
+  const checkInText = checkInStatus.label;
 
   return (
     <div className="mx-auto max-w-6xl space-y-8">
@@ -459,7 +497,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Stat cards */}
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         {loading ? (
           <>
             {[0, 1, 2, 3].map((i) => (
@@ -545,7 +583,7 @@ export default function DashboardPage() {
             <Card className="border-surface-border bg-card">
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm font-medium text-muted-foreground">
-                  Log streak
+                  Food log streak
                 </CardTitle>
               </CardHeader>
               <CardContent>
@@ -555,9 +593,28 @@ export default function DashboardPage() {
                     days
                   </span>
                 </p>
-                <CardDescription className="mt-1">
-                  Consecutive days with food log entries.
-                </CardDescription>
+            <CardDescription className="mt-1">
+              Consecutive days with any food log entries (meals or supplements).
+            </CardDescription>
+              </CardContent>
+            </Card>
+
+            <Card className="border-surface-border bg-card">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">
+                  Exercise streak
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="font-mono text-3xl font-semibold text-[#00aaff]">
+                  {workoutStreak(workouts.sessions)}
+                  <span className="ml-1 text-base font-normal text-muted-foreground">
+                    days
+                  </span>
+                </p>
+            <CardDescription className="mt-1">
+              Consecutive days with a completed workout session.
+            </CardDescription>
               </CardContent>
             </Card>
 
@@ -572,7 +629,7 @@ export default function DashboardPage() {
                   {checkInText}
                 </p>
                 <CardDescription className="mt-1">
-                  Weekly from your last progress entry.
+                  Weekly from your Atlas check-ins.
                 </CardDescription>
               </CardContent>
             </Card>
@@ -707,7 +764,7 @@ export default function DashboardPage() {
         <Card className="border-surface-border bg-card">
           <CardHeader>
             <CardTitle className="text-base text-white">Recent food log</CardTitle>
-            <CardDescription>Latest three entries</CardDescription>
+            <CardDescription>Latest three entries (meals and supplements)</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             {loading ? (
@@ -732,11 +789,14 @@ export default function DashboardPage() {
                     </p>
                     <p className="text-xs capitalize text-muted-foreground">
                       {e.mealType}
+                      {e.entryKind === "supplement" ? " · supplement" : ""}
                     </p>
                   </div>
                   <div className="shrink-0 text-right">
                     <p className="font-mono text-sm text-[#00ff88]">
-                      {Math.round(parseNutrients(e).calories ?? 0)} kcal
+                      {e.entryKind === "supplement"
+                        ? `${Math.round(parseNutrients(e).calories ?? 0)} kcal (micros)`
+                        : `${Math.round(parseNutrients(e).calories ?? 0)} kcal`}
                     </p>
                     <p className="text-xs text-muted-foreground">
                       {new Date(e.loggedAt).toLocaleTimeString(undefined, {

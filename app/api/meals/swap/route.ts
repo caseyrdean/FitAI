@@ -6,6 +6,11 @@ import {
   formatBloodWorkForNutrientEstimate,
   getPreferredBloodWorkRecord,
 } from "@/lib/bloodwork/context-for-ai";
+import {
+  buildCanonicalShoppingListFromMealPlanMeals,
+  normalizeMealPlanMeals,
+  shoppingListTelemetry,
+} from "@/lib/shopping/normalize";
 import Anthropic from "@anthropic-ai/sdk";
 
 const anthropic = new Anthropic({
@@ -82,12 +87,24 @@ Return ONLY a JSON object with: { "name": "...", "ingredients": [...], "calories
       meals[day] = dayMeals;
     }
 
+    const canonicalMeals = normalizeMealPlanMeals(meals as Record<string, unknown>);
+    const canonicalShoppingList =
+      buildCanonicalShoppingListFromMealPlanMeals(canonicalMeals);
+
     await prisma.mealPlan.update({
       where: { id: mealPlan.id },
-      data: { meals: meals as object },
+      data: {
+        meals: canonicalMeals as object,
+        shoppingList: canonicalShoppingList as object,
+      },
     });
 
-    return NextResponse.json({ success: true, newMeal, planId: mealPlan.id });
+    return NextResponse.json({
+      success: true,
+      newMeal,
+      planId: mealPlan.id,
+      shoppingTelemetry: shoppingListTelemetry(canonicalShoppingList),
+    });
   } catch (error) {
     console.error("Meal swap error:", error);
     return NextResponse.json(
