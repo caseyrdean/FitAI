@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
+import { FITAI_ATLAS_LAUNCH_EVENT, type AtlasLaunchDetail } from "@/lib/atlas-launch";
 import type { FitaiRefreshScope } from "@/lib/fitai-refresh";
 import { dispatchFitaiRefresh } from "@/lib/fitai-refresh";
 import { MessageCircle, X, Send, Loader2 } from "lucide-react";
@@ -29,6 +30,8 @@ export function AtlasChat() {
       "bloodwork",
       "supplements",
       "profile",
+      "analytics",
+      "notifications",
       "atlas",
       "dashboard",
     ]);
@@ -81,6 +84,22 @@ export function AtlasChat() {
         // ignore — will just start fresh
       }
     })();
+  }, []);
+
+  useEffect(() => {
+    const onLaunch = (ev: Event) => {
+      const custom = ev as CustomEvent<AtlasLaunchDetail>;
+      const detail = custom.detail ?? {};
+      setIsOpen(true);
+      if (detail.mode) setMode(detail.mode);
+      if (typeof detail.prompt === "string" && detail.prompt.trim().length > 0) {
+        setInput(detail.prompt);
+      }
+    };
+    window.addEventListener(FITAI_ATLAS_LAUNCH_EVENT, onLaunch as EventListener);
+    return () => {
+      window.removeEventListener(FITAI_ATLAS_LAUNCH_EVENT, onLaunch as EventListener);
+    };
   }, []);
 
   const scrollToBottom = useCallback(() => {
@@ -150,9 +169,6 @@ export function AtlasChat() {
               });
             } else if (event.type === "refresh") {
               const targetScope = normalizeTargetScope(event.target);
-              // #region agent log
-              fetch('http://127.0.0.1:7702/ingest/8b876957-51d4-454d-9a7e-692ba8eff35d',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'08b46b'},body:JSON.stringify({sessionId:'08b46b',runId:'initial',hypothesisId:'H4',location:'components/atlas-chat.tsx:sendMessage:refresh-event',message:'atlas SSE refresh received',data:{eventTarget:event.target,normalizedTarget:targetScope},timestamp:Date.now()})}).catch(()=>{});
-              // #endregion
               dispatchFitaiRefresh({
                 source: "atlas",
                 target: targetScope ?? undefined,
@@ -214,7 +230,7 @@ export function AtlasChat() {
     return (
       <button
         onClick={() => setIsOpen(true)}
-        className="fixed bottom-6 right-6 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-neon-green shadow-lg shadow-neon-green/20 transition-transform hover:scale-105"
+        className="fixed bottom-4 right-4 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-neon-green shadow-lg shadow-neon-green/20 transition-transform hover:scale-105 sm:bottom-6 sm:right-6"
       >
         <MessageCircle className="h-6 w-6 text-black" />
       </button>
@@ -222,10 +238,10 @@ export function AtlasChat() {
   }
 
   return (
-    <div className="fixed bottom-6 right-6 z-50 flex h-[600px] w-[420px] flex-col overflow-hidden rounded-2xl border border-surface-border bg-surface shadow-2xl shadow-black/50">
+    <div className="fixed inset-x-2 bottom-2 z-50 flex h-[72vh] max-h-[600px] w-auto flex-col overflow-hidden rounded-2xl border border-surface-border bg-surface shadow-2xl shadow-black/50 sm:bottom-6 sm:right-6 sm:left-auto sm:h-[600px] sm:w-[420px]">
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-surface-border bg-surface-dark px-4 py-3">
-        <div className="flex items-center gap-3">
+      <div className="flex items-center justify-between border-b border-surface-border bg-surface-dark px-3 py-3 sm:px-4">
+        <div className="flex min-w-0 items-center gap-2 sm:gap-3">
           <div className="flex h-8 w-8 items-center justify-center rounded-full bg-neon-green/10">
             <span className="text-xs font-bold text-neon-green">A</span>
           </div>
@@ -240,16 +256,15 @@ export function AtlasChat() {
           </div>
         </div>
         <div className="flex items-center gap-1">
-          {mode === "chat" && (
-            <select
-              value={mode}
-              onChange={(e) => setMode(e.target.value as ChatMode)}
-              className="mr-2 rounded bg-surface-light px-2 py-1 text-xs text-gray-400"
-            >
-              <option value="chat">Chat</option>
-              <option value="checkin">Check-in</option>
-            </select>
-          )}
+          <select
+            value={mode}
+            onChange={(e) => setMode(e.target.value as ChatMode)}
+            className="mr-1 max-w-[120px] rounded bg-surface-light px-2 py-1 text-xs text-gray-400 sm:mr-2 sm:max-w-none"
+          >
+            <option value="chat">Chat</option>
+            <option value="checkin">Check-in</option>
+            {needsOnboarding && <option value="onboarding">Onboarding</option>}
+          </select>
           <Button
             variant="ghost"
             size="icon"

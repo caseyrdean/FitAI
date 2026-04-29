@@ -154,7 +154,10 @@ export function WorkoutPlan({
         const err = (await res.json()) as { error?: string };
         throw new Error(err.error ?? `Request failed (${res.status})`);
       }
-      dispatchFitaiRefresh({ source: "workouts", scopes: ["workouts", "dashboard"] });
+      dispatchFitaiRefresh({
+        source: "workouts",
+        scopes: ["workouts", "analytics", "dashboard"],
+      });
       onSessionLogged?.();
     } catch (e) {
       setLogError(e instanceof Error ? e.message : "Failed to update session");

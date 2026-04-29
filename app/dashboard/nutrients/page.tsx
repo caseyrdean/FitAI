@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { launchAtlas } from "@/lib/atlas-launch";
 import { useAtlasRefresh } from "@/hooks/use-atlas-refresh";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -10,6 +12,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -317,18 +320,41 @@ export default function NutrientsPage() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight text-white">Micronutrients</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Tables and macros use your <span className="text-white/90">local calendar week</span>{" "}
-          (Sun–Sat, the week that contains today), matching the Meals page. Data comes from your{" "}
-          <span className="text-white/90">food log</span> (meals, meal-plan quick-add nutrients, and
-          logged supplements). Supplements get macro and micronutrient estimates for the dose (with
-          optional label overrides for macros on the Meals page). Typed meals are estimated from
-          description. All amounts are{" "}
+          Focus on your top nutrient gaps first, then use the tables and trends for deeper detail.
+          Data uses your <span className="text-white/90">local calendar week</span> (Sun–Sat) and
+          comes from logged meals + supplements. All amounts are{" "}
           <Badge variant="outline" className="border-neon-amber/40 text-neon-amber">
             ~est.
           </Badge>{" "}
           — not lab values.
         </p>
       </div>
+
+      <Card className="border-surface-border bg-card">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base text-white">Primary action</CardTitle>
+          <CardDescription>
+            Check your lowest-coverage nutrients, then adjust meals or supplements.
+          </CardDescription>
+          <Link href="/dashboard/meals" className="text-xs text-neon-green hover:underline">
+            Go to Meals
+          </Link>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="mt-2 w-fit border-surface-border text-xs"
+            onClick={() =>
+              launchAtlas({
+                mode: "chat",
+                prompt: "Use my nutrient data and suggest meals to close my biggest gaps.",
+              })
+            }
+          >
+            Ask Atlas about nutrient gaps
+          </Button>
+        </CardHeader>
+      </Card>
 
       {/* Week macros — always stored on food log rows; visible even when micros are missing */}
       {hasLogsWeek && (
@@ -407,7 +433,7 @@ export default function NutrientsPage() {
 
       {/* Vitamins + minerals for the current week */}
       <div>
-        <h2 className="mb-1 text-lg font-semibold text-white">This week — intake vs 7× daily target</h2>
+        <h2 className="mb-1 text-lg font-semibold text-white">Top weekly nutrient coverage</h2>
         <p className="mb-3 text-xs text-muted-foreground">
           Local week <span className="font-medium text-white/90">{weekRangeLabel}</span>
           <span className="ml-2 font-mono text-[11px] text-muted-foreground">

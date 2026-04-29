@@ -1,6 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { launchAtlas } from "@/lib/atlas-launch";
 import { useAtlasRefresh } from "@/hooks/use-atlas-refresh";
 import {
   BloodworkUpload,
@@ -118,10 +120,35 @@ export default function BloodworkPage() {
           Blood <span className="text-[#00ff88]">work</span>
         </h1>
         <p className="mt-1 text-sm text-gray-400">
-          Panels and analytes from your uploads, reference ranges from each row, flags when results
-          are out of range or within 10% of the high/low edge. Track each analyte over time below.
+          Add lab records, review flagged markers first, then inspect analyte trends over time.
         </p>
       </div>
+
+      <Card className="border-surface-border bg-card">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base text-white">Primary action</CardTitle>
+          <CardDescription>
+            Upload or enter your latest panel, then review flagged summary in upload history.
+          </CardDescription>
+          <Link href="/dashboard/supplements" className="text-xs text-neon-green hover:underline">
+            Go to Supplements
+          </Link>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="mt-2 w-fit border-surface-border text-xs"
+            onClick={() =>
+              launchAtlas({
+                mode: "chat",
+                prompt: "Review my flagged bloodwork markers and suggest next steps.",
+              })
+            }
+          >
+            Ask Atlas about flagged labs
+          </Button>
+        </CardHeader>
+      </Card>
 
       <BloodworkUpload
         onUploadComplete={() => {
@@ -242,7 +269,7 @@ export default function BloodworkPage() {
       <Card className="border-surface-border bg-card/80">
         <CardHeader>
           <CardTitle className="text-white">Upload history</CardTitle>
-          <CardDescription>Per-upload detail and full marker tables</CardDescription>
+          <CardDescription>Per-upload flagged summary and full marker tables</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           {loading && (
@@ -252,7 +279,7 @@ export default function BloodworkPage() {
             <p className="text-sm text-red-400">{fetchError}</p>
           )}
           {!loading && !fetchError && records.length === 0 && (
-            <p className="text-sm text-gray-400">No blood work uploaded yet.</p>
+            <p className="text-sm text-gray-400">No blood work records yet.</p>
           )}
           {!loading &&
             records.map((record) => {

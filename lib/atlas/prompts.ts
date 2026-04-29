@@ -36,6 +36,8 @@ Shopping list categories are strict and must only be: Protein, Dairy & Alternati
 
 Before you call generate_meal_plan, perform a duplicate audit across the entire week: collapse near-duplicate ingredient wording into one canonical grocery name, normalize measurement formatting, and ensure the shopping list is deduplicated to the best of your ability. Treat this as required every time, not optional.
 
+Progressive personalization memory: when a user shares stable preferences/constraints (liked foods, disliked foods, prep limits, schedule constraints, communication style, workout preferences), call update_personalization_memory to persist them so future coaching uses the same context.
+
 Week alignment: for generate_meal_plan and generate_workout_plan, set weekStart to YYYY-MM-DD for a day in the user's *current* calendar week (the week that contains "today" in their timezone). The app normalizes that to the Sunday starting that week. Do not default to a random future Sunday unless the user asked for a future week.
 
 Blood work and meal plans: the context includes **Latest blood panels** from the user's most recent structured lab upload. Whenever you call **generate_meal_plan** or **generate_workout_plan**, read that section first. **macroTargets**, **shoppingList**, food choices, and per-meal **minerals/vitamins** (especially sodium, potassium, fiber, fat quality) must reflect **flagged** analytes and the guidance under "How to use these labs". For workouts, let labs and recovery context influence volume, intensity, and modality where sensible (not medical clearance). If no structured markers exist yet, say so briefly and still generate from profile + logs; encourage upload or parse when relevant.
@@ -89,7 +91,7 @@ export async function buildContext(userId: string): Promise<string> {
   const thirtyDaysAgo = new Date(now);
   thirtyDaysAgo.setDate(now.getDate() - 30);
 
-  const [profile, mealPlan, foodLogs, bloodWork, workoutPlan, progress, supplementAdvice] =
+  const [profile, mealPlan, foodLogs, bloodWork, workoutPlan, progress, supplementAdvice, memory] =
     await Promise.all([
       prisma.healthProfile.findUnique({ where: { userId } }),
       getMealPlanForToday(userId),
@@ -104,6 +106,7 @@ export async function buildContext(userId: string): Promise<string> {
         orderBy: { date: "desc" },
       }),
       prisma.supplementAdvice.findUnique({ where: { userId } }),
+      prisma.personalizationMemory.findUnique({ where: { userId } }),
     ]);
 
   const sections: string[] = [];
@@ -122,6 +125,17 @@ export async function buildContext(userId: string): Promise<string> {
 - Dietary Restrictions: ${profile.dietaryRestrictions.length > 0 ? profile.dietaryRestrictions.join(", ") : "None"}
 - Food Preferences: ${profile.foodPreferences || "Not set"}
 - Onboarding Complete: ${profile.onboardingComplete}`);
+  }
+
+  if (memory) {
+    const raw = JSON.stringify(memory.memory, null, 2);
+    const clipped = raw.length > 2000 ? `${raw.slice(0, 2000)}\n…(truncated)` : raw;
+    sections.push(
+      `## Personalization Memory\n` +
+        `Version: ${memory.version} · Updated by: ${memory.updatedBy}\n\n${clipped}`,
+    );
+  } else {
+    sections.push("## Personalization Memory\nNo persistent memory saved yet.");
   }
 
   const MEAL_JSON_CAP = 1200;

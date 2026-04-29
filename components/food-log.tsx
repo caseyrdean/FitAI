@@ -273,7 +273,10 @@ export function FoodLog({ onAfterLog, mealPlan: mealPlanProp, refreshToken }: Fo
       }
       setDescription("");
       await load();
-      dispatchFitaiRefresh({ source: "foodlog", scopes: ["foodlog", "meals", "dashboard"] });
+      dispatchFitaiRefresh({
+        source: "foodlog",
+        scopes: ["foodlog", "meals", "analytics", "dashboard"],
+      });
       onAfterLog?.();
     } catch {
       setError("Failed to log food");
@@ -343,7 +346,10 @@ export function FoodLog({ onAfterLog, mealPlan: mealPlanProp, refreshToken }: Fo
       setSupCarbs("");
       setSupFat("");
       await load();
-      dispatchFitaiRefresh({ source: "foodlog", scopes: ["foodlog", "supplements", "dashboard"] });
+      dispatchFitaiRefresh({
+        source: "foodlog",
+        scopes: ["foodlog", "supplements", "analytics", "dashboard"],
+      });
       onAfterLog?.();
     } catch {
       setError("Failed to log supplement");
@@ -374,7 +380,10 @@ export function FoodLog({ onAfterLog, mealPlan: mealPlanProp, refreshToken }: Fo
         return;
       }
       await load();
-      dispatchFitaiRefresh({ source: "foodlog", scopes: ["foodlog", "meals", "dashboard"] });
+      dispatchFitaiRefresh({
+        source: "foodlog",
+        scopes: ["foodlog", "meals", "analytics", "dashboard"],
+      });
       onAfterLog?.();
     } catch {
       setError("Failed to log meal");
@@ -432,7 +441,10 @@ export function FoodLog({ onAfterLog, mealPlan: mealPlanProp, refreshToken }: Fo
       }
       setEditState(null);
       await load();
-      dispatchFitaiRefresh({ source: "foodlog", scopes: ["foodlog", "meals", "dashboard"] });
+      dispatchFitaiRefresh({
+        source: "foodlog",
+        scopes: ["foodlog", "meals", "analytics", "dashboard"],
+      });
       onAfterLog?.();
     } catch {
       setError("Failed to save changes");
@@ -453,7 +465,10 @@ export function FoodLog({ onAfterLog, mealPlan: mealPlanProp, refreshToken }: Fo
         return;
       }
       await load();
-      dispatchFitaiRefresh({ source: "foodlog", scopes: ["foodlog", "meals", "dashboard"] });
+      dispatchFitaiRefresh({
+        source: "foodlog",
+        scopes: ["foodlog", "meals", "analytics", "dashboard"],
+      });
       onAfterLog?.();
     } catch {
       setError("Failed to delete entry");

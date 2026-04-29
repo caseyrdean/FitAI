@@ -9,6 +9,7 @@ import {
   shoppingCategoryLabels,
 } from "@/lib/shopping/normalize";
 import { sanitizeSupplementAdviceItems } from "@/lib/supplements/sanitize-advice";
+import { mergeMemory, normalizeMemory } from "@/lib/memory/merge";
 import type Anthropic from "@anthropic-ai/sdk";
 
 export interface ToolResult {
@@ -22,6 +23,8 @@ export interface ToolResult {
     | "progress"
     | "supplements"
     | "profile"
+    | "analytics"
+    | "notifications"
     | "dashboard";
   /** When set, all listed targets are refreshed (overrides `refreshTarget`). */
   refreshTargets?: (
@@ -31,6 +34,8 @@ export interface ToolResult {
     | "progress"
     | "supplements"
     | "profile"
+    | "analytics"
+    | "notifications"
     | "dashboard"
   )[];
 }
@@ -729,6 +734,72 @@ const updateHealthProfile: AtlasTool = {
   },
 };
 
+const updatePersonalizationMemory: AtlasTool = {
+  definition: {
+    name: "update_personalization_memory",
+    description:
+      "Store long-lived personalization memory Atlas should remember across sessions (likes/dislikes, schedule constraints, prep limits, workout preferences, communication style). Use when confidence is high and the preference is stable.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        memory: {
+          type: "object",
+          description:
+            "Full normalized memory object. Buckets: foodLikes, foodDislikes, scheduleConstraints, prepBudgetTime, workoutPreferences, adherenceFriction, communicationStyle. Each item shape: { value, confidence?, source? }",
+        },
+        eventType: {
+          type: "string",
+          description: "Optional event label, e.g. atlas_inferred_preference",
+        },
+      },
+      required: ["memory"],
+    },
+  },
+  async execute(input, userId) {
+    const patch = normalizeMemory(input.memory);
+    const existing = await prisma.personalizationMemory.findUnique({
+      where: { userId },
+    });
+    const row = existing
+      ? await prisma.personalizationMemory.update({
+          where: { userId },
+          data: {
+            memory: mergeMemory(existing.memory, patch) as object,
+            updatedBy: "atlas",
+            version: existing.version + 1,
+          },
+        })
+      : await prisma.personalizationMemory.create({
+          data: {
+            userId,
+            memory: patch as object,
+            updatedBy: "atlas",
+            version: 1,
+          },
+        });
+    await prisma.personalizationMemoryEvent.create({
+      data: {
+        userId,
+        personalizationMemoryId: row.id,
+        updatedBy: "atlas",
+        eventType:
+          typeof input.eventType === "string" && input.eventType.trim().length > 0
+            ? input.eventType
+            : "atlas_memory_update",
+        payload: patch as object,
+      },
+    });
+    return {
+      content: JSON.stringify({
+        success: true,
+        message: "Personalization memory updated",
+        version: row.version,
+      }),
+      refreshTargets: ["profile", "dashboard"],
+    };
+  },
+};
+
 const flagUnsafeCondition: AtlasTool = {
   definition: {
     name: "flag_unsafe_condition",
@@ -771,6 +842,7 @@ export const ATLAS_TOOLS: AtlasTool[] = [
   generateWorkoutPlan,
   webSearch,
   updateHealthProfile,
+  updatePersonalizationMemory,
   flagUnsafeCondition,
 ];
 

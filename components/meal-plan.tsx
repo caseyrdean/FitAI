@@ -867,7 +867,10 @@ export function MealPlan({ onAfterSwap, refreshToken }: MealPlanProps) {
         return;
       }
       await load();
-      dispatchFitaiRefresh({ source: "meals", scopes: ["meals", "dashboard"] });
+      dispatchFitaiRefresh({
+        source: "meals",
+        scopes: ["meals", "analytics", "dashboard"],
+      });
       onAfterSwap?.();
     } catch {
       setError("Swap failed");

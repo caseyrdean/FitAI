@@ -19,6 +19,10 @@ model User {
   progressEntries ProgressEntry[]
   conversations  AtlasConversation[]
   supplementAdvice SupplementAdvice?
+  weeklyScores   WeeklyScore[]
+  personalizationMemory PersonalizationMemory?
+  personalizationMemoryEvents PersonalizationMemoryEvent[]
+  notifications Notification[]
 }
 
 model HealthProfile {
@@ -162,4 +166,64 @@ model AtlasMessage {
   createdAt      DateTime @default(now())
 
   @@index([conversationId])
+}
+
+model WeeklyScore {
+  id               String   @id @default(cuid())
+  userId           String
+  user             User     @relation(fields: [userId], references: [id])
+  weekStart        DateTime
+  overallScore     Int
+  nutritionScore   Int
+  workoutScore     Int
+  checkinScore     Int
+  consistencyScore Int?
+  summary          String   @default("")
+  coachingRecap    String   @default("")
+  highlights       Json
+  actionItems      Json
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([userId, weekStart])
+  @@index([userId, createdAt])
+}
+
+model PersonalizationMemory {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id])
+  memory    Json
+  version   Int      @default(1)
+  updatedBy String   @default("atlas")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model PersonalizationMemoryEvent {
+  id                  String   @id @default(cuid())
+  userId              String
+  user                User     @relation(fields: [userId], references: [id])
+  personalizationMemoryId String?
+  eventType           String
+  updatedBy           String
+  payload             Json
+  createdAt           DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+model Notification {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  type       String
+  title      String
+  message    String
+  payload    Json?
+  dismissed  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([userId, dismissed, createdAt])
 }

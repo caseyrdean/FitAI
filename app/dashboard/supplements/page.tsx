@@ -2,8 +2,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { launchAtlas } from "@/lib/atlas-launch";
 import { useAtlasRefresh } from "@/hooks/use-atlas-refresh";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -132,14 +134,8 @@ export default function SupplementsPage() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight text-white">Supplements</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Atlas recommends <span className="text-white/90">generic</span> supplement forms and doses
-          to cover what your meal plan and logs may not fully provide.{" "}
-          <span className="text-white/90">Flagged blood work</span> is weighted heavily. Each row shows
-          the dose for <span className="text-white/90">one intake</span> (one pill, scoop, or serving) —{" "}
-          <span className="text-white/90">not a weekly total</span>. Use <strong className="text-white/90">Frequency</strong>{" "}
-          to see how often that intake happens; your usual <span className="text-white/90">daily</span> exposure
-          is based on that (e.g. twice daily → about two times the amount per day). Nothing here is a
-          prescription — discuss changes with your clinician when appropriate.
+          Use this page to follow your supplement protocol and understand why each item is recommended.
+          Amounts are per intake and values are guidance only (not a prescription).
         </p>
         <p className="mt-2 text-sm">
           <Link
@@ -151,6 +147,29 @@ export default function SupplementsPage() {
           so micronutrient totals include them everywhere.
         </p>
       </div>
+
+      <Card className="border-surface-border bg-card">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base text-white">Primary action</CardTitle>
+          <CardDescription>
+            Review today&apos;s items, then log supplements from Meals so nutrient totals stay aligned.
+          </CardDescription>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="mt-2 w-fit border-surface-border text-xs"
+            onClick={() =>
+              launchAtlas({
+                mode: "chat",
+                prompt: "Explain my supplement protocol and simplify it for daily use.",
+              })
+            }
+          >
+            Ask Atlas about this protocol
+          </Button>
+        </CardHeader>
+      </Card>
 
       {!data ? (
         <Card className="border-surface-border bg-card">
@@ -166,7 +185,7 @@ export default function SupplementsPage() {
         <>
           <Card className="border-surface-border bg-card">
             <CardHeader className="pb-2">
-              <CardTitle className="text-base text-white">Overview</CardTitle>
+              <CardTitle className="text-base text-white">Plan summary</CardTitle>
               {weekLabel && (
                 <CardDescription>
                   Meal-plan week when this list was last saved ({weekLabel}) — not a dosing period;
@@ -193,10 +212,10 @@ export default function SupplementsPage() {
 
           <Card className="border-surface-border bg-card">
             <CardHeader>
-              <CardTitle className="text-white">Recommended items</CardTitle>
+              <CardTitle className="text-white">Protocol items</CardTitle>
               <CardDescription>
-                <span className="text-foreground/90">Amount</span> = one intake;{" "}
-                <span className="text-foreground/90">Frequency</span> = how often per day or week. Values are{" "}
+                <span className="text-foreground/90">Amount</span> is one intake and{" "}
+                <span className="text-foreground/90">Frequency</span> is how often it occurs. Values are{" "}
                 <Badge variant="outline" className="border-neon-amber/40 text-neon-amber">~est.</Badge> — not
                 individualized medical advice.
               </CardDescription>
@@ -204,8 +223,7 @@ export default function SupplementsPage() {
             <CardContent className="space-y-4">
               {items.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
-                  No structured rows on file. Ask Atlas to refresh your plan or call out labs and diet
-                  gaps in chat.
+                  No supplement items saved yet. Ask Atlas to refresh your plan using your labs and diet gaps.
                 </p>
               ) : (
                 <ul className="space-y-4">

@@ -11,16 +11,35 @@ import {
   Droplets,
   Dumbbell,
   Pill,
+  Brain,
+  LineChart,
 } from "lucide-react";
 
 const navItems = [
-  { href: "/dashboard", label: "Home", icon: Home },
-  { href: "/dashboard/meals", label: "Meals", icon: UtensilsCrossed },
-  { href: "/dashboard/nutrients", label: "Nutrients", icon: FlaskConical },
-  { href: "/dashboard/supplements", label: "Supplements", icon: Pill },
-  { href: "/dashboard/progress", label: "Progress", icon: TrendingUp },
-  { href: "/dashboard/bloodwork", label: "Blood Work", icon: Droplets },
-  { href: "/dashboard/workouts", label: "Workouts", icon: Dumbbell },
+  {
+    group: "Today",
+    items: [
+      { href: "/dashboard", label: "Home", icon: Home },
+      { href: "/dashboard/meals", label: "Meals", icon: UtensilsCrossed },
+      { href: "/dashboard/workouts", label: "Workouts", icon: Dumbbell },
+      { href: "/dashboard/progress", label: "Progress", icon: TrendingUp },
+    ],
+  },
+  {
+    group: "Review",
+    items: [
+      { href: "/dashboard/analytics", label: "Analytics", icon: LineChart },
+      { href: "/dashboard/nutrients", label: "Nutrients", icon: FlaskConical },
+      { href: "/dashboard/bloodwork", label: "Blood Work", icon: Droplets },
+    ],
+  },
+  {
+    group: "Configure",
+    items: [
+      { href: "/dashboard/supplements", label: "Supplements", icon: Pill },
+      { href: "/dashboard/memory", label: "Memory", icon: Brain },
+    ],
+  },
 ];
 
 export default function DashboardLayout({
@@ -42,27 +61,34 @@ export default function DashboardLayout({
           </span>
         </div>
 
-        <nav className="flex-1 space-y-1 p-4">
-          {navItems.map((item) => {
-            const isActive =
-              pathname === item.href ||
-              (item.href !== "/dashboard" && pathname.startsWith(item.href));
-            const Icon = item.icon;
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
-                  isActive
-                    ? "border-l-2 border-neon-green bg-neon-green/5 text-neon-green"
-                    : "text-gray-400 hover:bg-surface-light hover:text-white"
-                }`}
-              >
-                <Icon className="h-4 w-4" />
-                {item.label}
-              </Link>
-            );
-          })}
+        <nav className="flex-1 space-y-4 overflow-y-auto p-4">
+          {navItems.map((section) => (
+            <div key={section.group} className="space-y-1">
+              <p className="px-2 text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                {section.group}
+              </p>
+              {section.items.map((item) => {
+                const isActive =
+                  pathname === item.href ||
+                  (item.href !== "/dashboard" && pathname.startsWith(item.href));
+                const Icon = item.icon;
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
+                      isActive
+                        ? "border-l-2 border-neon-green bg-neon-green/5 text-neon-green"
+                        : "text-gray-400 hover:bg-surface-light hover:text-white"
+                    }`}
+                  >
+                    <Icon className="h-4 w-4" />
+                    {item.label}
+                  </Link>
+                );
+              })}
+            </div>
+          ))}
         </nav>
 
         <div className="border-t border-surface-border p-4">

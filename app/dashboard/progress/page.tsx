@@ -1,11 +1,13 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { launchAtlas } from "@/lib/atlas-launch";
+import { Button } from "@/components/ui/button";
 import { ProgressChart, type ProgressChartPoint } from "@/components/progress-chart";
 import { useAtlasRefresh } from "@/hooks/use-atlas-refresh";
 import { dispatchFitaiRefresh } from "@/lib/fitai-refresh";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -154,7 +156,10 @@ export default function ProgressPage() {
       setWeight("");
       setEnergyLevel("7");
       setNotes("");
-      dispatchFitaiRefresh({ source: "progress", scopes: ["progress", "dashboard"] });
+      dispatchFitaiRefresh({
+        source: "progress",
+        scopes: ["progress", "analytics", "dashboard"],
+      });
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : "Failed to save");
     } finally {
@@ -191,17 +196,43 @@ export default function ProgressPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <div>
         <h1 className="text-2xl font-bold tracking-tight text-white">Progress</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Weight and energy from your logs. Values are self-reported with{" "}
+          Log today first, then review trends. Weight and energy are self-reported with{" "}
           <Badge variant="outline" className="border-neon-amber/40 text-neon-amber">
             ~est.
           </Badge>{" "}
           where applicable.
         </p>
       </div>
+
+      <Card className="border-surface-border bg-card">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base text-white">Primary action</CardTitle>
+          <CardDescription>
+            Add your quick log below, then use the chart to review trend direction.
+          </CardDescription>
+          <Link href="/dashboard/analytics" className="text-xs text-neon-green hover:underline">
+            Go to Weekly Review
+          </Link>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="mt-2 w-fit border-surface-border text-xs"
+            onClick={() =>
+              launchAtlas({
+                mode: "chat",
+                prompt: "Review my recent progress trend and suggest one adjustment.",
+              })
+            }
+          >
+            Ask Atlas about this trend
+          </Button>
+        </CardHeader>
+      </Card>
 
       <div className="grid gap-4 md:grid-cols-3">
         <Card className="border-surface-border bg-surface-light">
@@ -259,8 +290,8 @@ export default function ProgressPage() {
 
       <Card className="border-surface-border bg-surface-light">
         <CardHeader>
-          <CardTitle className="text-white">Quick log</CardTitle>
-          <CardDescription>POSTs to /api/progress</CardDescription>
+          <CardTitle className="text-white">Log details</CardTitle>
+          <CardDescription>Save your daily progress check-in.</CardDescription>
         </CardHeader>
         <form onSubmit={handleSubmit}>
           <CardContent className="space-y-4">

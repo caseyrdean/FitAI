@@ -11,6 +11,8 @@ export const FITAI_REFRESH_SCOPES = [
   "bloodwork",
   "supplements",
   "profile",
+  "analytics",
+  "notifications",
   "atlas",
   "dashboard",
 ] as const;

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   WorkoutPlan,
@@ -84,6 +85,18 @@ export default function WorkoutsPage() {
           Follow your Atlas-generated plan and log sessions as you go.
         </p>
       </div>
+
+      <Card className="border-surface-border bg-card">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base text-white">Primary action</CardTitle>
+          <CardDescription>
+            Mark today&apos;s workout complete (or undo it) in your workout cards below.
+          </CardDescription>
+          <Link href="/dashboard/progress" className="text-xs text-neon-green hover:underline">
+            Go to Progress
+          </Link>
+        </CardHeader>
+      </Card>
 
       <div className="grid gap-4 sm:grid-cols-2">
         <Card className="border-surface-border bg-card/80">

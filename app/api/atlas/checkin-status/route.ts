@@ -74,6 +74,30 @@ export async function GET() {
         : `Check-in overdue by ${daysSinceLastCheckIn - 6} days`;
   }
 
+  if (status === "overdue") {
+    const existing = await prisma.notification.findFirst({
+      where: {
+        userId: USER_ID,
+        type: "checkin_overdue",
+        dismissed: false,
+      },
+    });
+    if (!existing) {
+      await prisma.notification.create({
+        data: {
+          userId: USER_ID,
+          type: "checkin_overdue",
+          title: "Weekly check-in overdue",
+          message: label,
+          payload: {
+            daysSinceLastCheckIn,
+            lastCheckInAt: lastCheckInAt.toISOString(),
+          },
+        },
+      });
+    }
+  }
+
   return NextResponse.json({
     status,
     label,

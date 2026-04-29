@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { MealPlan, type MealPlanApi } from "@/components/meal-plan";
 import { FoodLog, type FoodLogEntryApi, type FoodLogNutrients } from "@/components/food-log";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAtlasRefresh } from "@/hooks/use-atlas-refresh";
 import { currentLocalWeekDateKeys, FOOD_LOG_SYNC_DAYS } from "@/lib/local-week";
 import { localDateKeyFromLoggedAt, todayLocalDateKey } from "@/lib/nutrients/micronutrients";
@@ -196,10 +197,7 @@ export default function MealsDashboardPage() {
           Meals & <span className="text-neon-green">nutrition</span>
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          This week&apos;s intake (Sun–Sat) from your food log — meals{" "}
-          <span className="text-white/80">and</span> supplements — vs 7× your plan&apos;s daily macro
-          targets. Micronutrients on the Nutrients tab include the same log. All values{" "}
-          <span className="text-neon-green">~est.</span>
+          Log what you ate today, adjust your weekly plan, and use your shopping list in one place.
         </p>
       </div>
 
@@ -250,8 +248,49 @@ export default function MealsDashboardPage() {
         })}
       </div>
 
-      <MealPlan onAfterSwap={refreshStats} refreshToken={statsTick} />
-      <FoodLog mealPlan={plan} onAfterLog={refreshStats} refreshToken={statsTick} />
+      <Tabs defaultValue="today-log" className="space-y-4">
+        <TabsList className="h-auto w-full flex-col items-stretch gap-1 bg-surface-light p-1 sm:h-10 sm:flex-row sm:items-center sm:gap-0">
+          <TabsTrigger value="today-log">Today Log</TabsTrigger>
+          <TabsTrigger value="weekly-plan">Weekly Plan</TabsTrigger>
+          <TabsTrigger value="shopping">Shopping</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="today-log" className="space-y-4">
+          <Card className="border-surface-border bg-card">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base text-white">Primary action</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm text-muted-foreground">
+              Log intake now. Use quick log, manual entries, and supplement logging below.
+            </CardContent>
+          </Card>
+          <FoodLog mealPlan={plan} onAfterLog={refreshStats} refreshToken={statsTick} />
+        </TabsContent>
+
+        <TabsContent value="weekly-plan" className="space-y-4">
+          <Card className="border-surface-border bg-card">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base text-white">Weekly meal plan</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm text-muted-foreground">
+              Review each day and swap meals when needed. Changes sync across the app.
+            </CardContent>
+          </Card>
+          <MealPlan onAfterSwap={refreshStats} refreshToken={statsTick} />
+        </TabsContent>
+
+        <TabsContent value="shopping" className="space-y-4">
+          <Card className="border-surface-border bg-card">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base text-white">Shopping list</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm text-muted-foreground">
+              Open the Shopping tab inside Weekly Plan to view your canonical list by category.
+            </CardContent>
+          </Card>
+          <MealPlan onAfterSwap={refreshStats} refreshToken={statsTick} />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAtlasRefresh } from "@/hooks/use-atlas-refresh";
 import {
@@ -129,6 +130,24 @@ type CheckInStatusPayload = {
   lastCheckInAt: string | null;
   daysSinceLastCheckIn: number | null;
   daysUntilDue: number | null;
+};
+
+type WeeklyScore = {
+  id: string;
+  weekStart: string;
+  overallScore: number;
+  summary: string;
+  coachingRecap: string;
+  actionItems: string[];
+};
+
+type InAppNotification = {
+  id: string;
+  type: string;
+  title: string;
+  message: string;
+  dismissed: boolean;
+  createdAt: string;
 };
 
 // --- helpers ---
@@ -323,6 +342,9 @@ export default function DashboardPage() {
     daysSinceLastCheckIn: null,
     daysUntilDue: null,
   });
+  const [weeklyScore, setWeeklyScore] = useState<WeeklyScore | null>(null);
+  const [notifications, setNotifications] = useState<InAppNotification[]>([]);
+  const [dismissingId, setDismissingId] = useState<string | null>(null);
 
   const triggerRefresh = useCallback(() => setRefreshTick((n) => n + 1), []);
   useAtlasRefresh(
@@ -339,6 +361,8 @@ export default function DashboardPage() {
         "bloodwork",
         "supplements",
         "profile",
+        "analytics",
+        "notifications",
       ],
     },
   );
@@ -347,7 +371,7 @@ export default function DashboardPage() {
     let cancelled = false;
     (async () => {
       setLoading(true);
-      const [fl, pr, mp, wo, bw, cis] = await Promise.all([
+      const [fl, pr, mp, wo, bw, cis, ws, notif] = await Promise.all([
         fetchJson<FoodLogEntry[]>(
           `/api/foodlog?days=${FOOD_LOG_SYNC_DAYS}`,
           [],
@@ -366,6 +390,8 @@ export default function DashboardPage() {
           daysSinceLastCheckIn: null,
           daysUntilDue: null,
         }),
+        fetchJson<WeeklyScore | null>("/api/analytics/weekly-score", null),
+        fetchJson<InAppNotification[]>("/api/notifications", []),
       ]);
       if (!cancelled) {
         setFoodLog(Array.isArray(fl) ? fl : []);
@@ -381,6 +407,8 @@ export default function DashboardPage() {
         );
         setBloodwork(Array.isArray(bw) ? bw : []);
         setCheckInStatus(cis);
+        setWeeklyScore(ws);
+        setNotifications(Array.isArray(notif) ? notif : []);
         setLoading(false);
       }
     })();
@@ -485,6 +513,23 @@ export default function DashboardPage() {
 
   const checkInText = checkInStatus.label;
 
+  const dismissNotification = useCallback(async (id: string) => {
+    setDismissingId(id);
+    try {
+      const res = await fetch("/api/notifications", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, dismissed: true }),
+      });
+      if (!res.ok) return;
+      setNotifications((prev) =>
+        prev.map((n) => (n.id === id ? { ...n, dismissed: true } : n)),
+      );
+    } finally {
+      setDismissingId(null);
+    }
+  }, []);
+
   return (
     <div className="mx-auto max-w-6xl space-y-8">
       <div>
@@ -496,8 +541,26 @@ export default function DashboardPage() {
         </p>
       </div>
 
+      <Card className="border-surface-border bg-card">
+        <CardHeader>
+          <CardTitle className="text-base text-white">Primary action</CardTitle>
+          <CardDescription>Choose one action and continue from there.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-2 sm:grid-cols-3">
+          <Link href="/dashboard/meals" className="rounded-md border border-surface-border bg-surface/40 px-3 py-2 text-sm text-white hover:bg-surface-light">
+            Log meals
+          </Link>
+          <Link href="/dashboard/workouts" className="rounded-md border border-surface-border bg-surface/40 px-3 py-2 text-sm text-white hover:bg-surface-light">
+            Update workouts
+          </Link>
+          <Link href="/dashboard/analytics" className="rounded-md border border-surface-border bg-surface/40 px-3 py-2 text-sm text-white hover:bg-surface-light">
+            Review weekly score
+          </Link>
+        </CardContent>
+      </Card>
+
       {/* Stat cards */}
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
         {loading ? (
           <>
             {[0, 1, 2, 3].map((i) => (
@@ -519,7 +582,7 @@ export default function DashboardPage() {
                   Today&apos;s calories
                 </CardTitle>
               </CardHeader>
-              <CardContent>
+              <CardContent className="space-y-2">
                 <p className="font-mono text-3xl font-semibold text-[#00ff88]">
                   {Math.round(todayTotals.calories).toLocaleString()}
                   {calorieTarget != null && (
@@ -534,6 +597,12 @@ export default function DashboardPage() {
                     Add a meal plan for a calorie target.
                   </CardDescription>
                 )}
+                <Link
+                  href="/dashboard/meals"
+                  className="mt-2 inline-block text-xs text-neon-green hover:underline"
+                >
+                  Go to Meals
+                </Link>
               </CardContent>
             </Card>
 
@@ -547,7 +616,7 @@ export default function DashboardPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-3 gap-2 text-center">
+                <div className="grid grid-cols-1 gap-2 text-center sm:grid-cols-3">
                   <div className="rounded-md border border-[#00ff88]/25 bg-[#00ff88]/5 px-2 py-2">
                     <p className="font-mono text-sm font-semibold text-[#00ff88]">
                       P {Math.round(todayTotals.protein_g)}g
@@ -586,7 +655,7 @@ export default function DashboardPage() {
                   Food log streak
                 </CardTitle>
               </CardHeader>
-              <CardContent>
+              <CardContent className="space-y-2">
                 <p className="font-mono text-3xl font-semibold text-[#ffaa00]">
                   {streak}
                   <span className="ml-1 text-base font-normal text-muted-foreground">
@@ -605,7 +674,7 @@ export default function DashboardPage() {
                   Exercise streak
                 </CardTitle>
               </CardHeader>
-              <CardContent>
+              <CardContent className="space-y-2">
                 <p className="font-mono text-3xl font-semibold text-[#00aaff]">
                   {workoutStreak(workouts.sessions)}
                   <span className="ml-1 text-base font-normal text-muted-foreground">
@@ -624,18 +693,92 @@ export default function DashboardPage() {
                   Next check-in
                 </CardTitle>
               </CardHeader>
-              <CardContent>
+              <CardContent className="space-y-2">
                 <p className="text-lg font-semibold text-[#00aaff]">
                   {checkInText}
                 </p>
                 <CardDescription className="mt-1">
                   Weekly from your Atlas check-ins.
                 </CardDescription>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Use Atlas chat panel for check-ins.
+                </p>
+              </CardContent>
+            </Card>
+
+            <Card className="border-surface-border bg-card">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">
+                  Weekly score
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {weeklyScore ? (
+                  <>
+                    <p className="font-mono text-3xl font-semibold text-[#00ff88]">
+                      {weeklyScore.overallScore}
+                      <span className="ml-1 text-base font-normal text-muted-foreground">
+                        /100
+                      </span>
+                    </p>
+                    <CardDescription className="mt-1 line-clamp-2">
+                      {weeklyScore.coachingRecap || weeklyScore.summary}
+                    </CardDescription>
+                  </>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    No weekly score yet.
+                  </p>
+                )}
+                <Link
+                  href="/dashboard/analytics"
+                  className="mt-2 inline-block text-xs text-neon-green hover:underline"
+                >
+                  Go to Analytics
+                </Link>
               </CardContent>
             </Card>
           </>
         )}
       </div>
+
+      {!loading && notifications.some((n) => !n.dismissed) && (
+        <Card className="border-surface-border bg-card">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              Notifications
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {notifications
+              .filter((n) => !n.dismissed)
+              .slice(0, 3)
+              .map((n) => (
+                <div
+                  key={n.id}
+                  className="rounded-md border border-surface-border bg-surface/50 px-3 py-2"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-medium text-white">{n.title}</p>
+                      <p className="text-xs text-muted-foreground">{n.message}</p>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 border-surface-border px-2 text-xs"
+                      disabled={dismissingId === n.id}
+                      onClick={() => void dismissNotification(n.id)}
+                    >
+                      {dismissingId === n.id ? "..." : "Dismiss"}
+                    </Button>
+                  </div>
+                </div>
+              ))}
+          </CardContent>
+        </Card>
+      )}
 
       <Separator className="bg-surface-border" />
 
@@ -765,6 +908,9 @@ export default function DashboardPage() {
           <CardHeader>
             <CardTitle className="text-base text-white">Recent food log</CardTitle>
             <CardDescription>Latest three entries (meals and supplements)</CardDescription>
+            <Link href="/dashboard/meals" className="text-xs text-neon-green hover:underline">
+              Go to Meals
+            </Link>
           </CardHeader>
           <CardContent className="space-y-3">
             {loading ? (
@@ -820,6 +966,9 @@ export default function DashboardPage() {
             <CardDescription>
               Outside target/reference or marked abnormal on your lab report
             </CardDescription>
+            <Link href="/dashboard/bloodwork" className="text-xs text-neon-green hover:underline">
+              Go to Blood Work
+            </Link>
           </CardHeader>
           <CardContent className="space-y-3">
             {loading ? (
@@ -881,6 +1030,9 @@ export default function DashboardPage() {
               Today&apos;s workout
             </CardTitle>
             <CardDescription>From your current weekly plan</CardDescription>
+            <Link href="/dashboard/workouts" className="text-xs text-neon-green hover:underline">
+              Go to Workouts
+            </Link>
           </div>
           {!loading && todaySession?.completed && (
             <Badge
